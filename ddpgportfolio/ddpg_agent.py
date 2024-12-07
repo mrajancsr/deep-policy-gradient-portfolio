@@ -197,7 +197,7 @@ class DDPGAgent:
 
                     # get the relative price vector from price tensor to calculate reward
                     yt = 1 / xt[0, :, -2]
-                    reward = self.portfolio.get_reward(action, yt, previous_action)
+                    reward = self.portfolio.get_reward(action, yt, previous_action) * self.portfolio.get_initial_portfolio_value()
                     next_state = (xt_next, action)
                     self.replay_memory.add(state, action, reward, next_state)
 

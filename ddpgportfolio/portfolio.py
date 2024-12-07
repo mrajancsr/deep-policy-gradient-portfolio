@@ -31,6 +31,7 @@ class Portfolio:
     asset_names: List[str]
     __prices: Dict[str, pd.DataFrame] = field(init=False, default_factory=lambda: {})
     __assets: Dict[str, Asset] = field(init=False)
+    __initial_port: float = 10000
     m_assets: int = field(init=False, default=0)
     m_noncash_assets: int = field(init=False, default=0)
 
@@ -60,6 +61,9 @@ class Portfolio:
     def __repr__(self) -> str:
         return f"Portfolio size: {self.m_assets} \
             \nm_assets: {[asset.name for asset in self.assets()]}"
+    
+    def get_initial_portfolio_value(self):
+        return self.__initial_port
 
     def get_asset(self, name: str) -> Asset:
         """Returns the asset in the portfolio given the name of the asset
