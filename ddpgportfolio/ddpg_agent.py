@@ -7,12 +7,12 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch_snippets.torch_loader import Report
 
-from adaptivepm.dataset import (
+from ddpgportfolio.dataset import (
     KrakenDataSet,
 )
-from adaptivepm.memory import ExperienceReplayMemory, PortfolioVectorMemory
-from adaptivepm.models import Actor, Critic
-from adaptivepm.portfolio import Portfolio
+from ddpgportfolio.memory import ExperienceReplayMemory, PortfolioVectorMemory
+from ddpgportfolio.models import Actor, Critic
+from ddpgportfolio.portfolio import Portfolio
 
 torch.set_default_device("mps")
 

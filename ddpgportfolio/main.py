@@ -8,8 +8,8 @@ from typing import List
 
 import torch
 
-from adaptivepm.ddpg_agent import DDPGAgent
-from adaptivepm.portfolio import Portfolio
+from ddpgportfolio.ddpg_agent import DDPGAgent
+from ddpgportfolio.portfolio import Portfolio
 
 torch.set_default_device("mps")
 

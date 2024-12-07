@@ -1,1 +1,1 @@
-from adaptivepm.asset import Asset  # noqa
+from ddpgportfolio.asset import Asset  # noqa

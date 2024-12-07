@@ -8,7 +8,7 @@ from typing import Dict, Iterator, List
 import pandas as pd
 import torch
 
-from adaptivepm import Asset
+from ddpgportfolio import Asset
 
 PATH_TO_PRICES_PICKLE = os.path.join(
     os.getcwd(), "datasets", "Kraken_pipeline_output", "prices.pkl"
