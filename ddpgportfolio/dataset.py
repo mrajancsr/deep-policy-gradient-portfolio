@@ -25,6 +25,7 @@ class KrakenDataSet(Dataset):
         self.portfolio = portfolio
         self.window_size = window_size
         self.step_size = step_size
+        self.start_index = self.window_size - 1
         self.close_pr = torch.tensor(
             self.portfolio.get_close_price().values[:, 1:], dtype=torch.float32
         ).to(device)
@@ -37,7 +38,7 @@ class KrakenDataSet(Dataset):
         self.device = device
 
     def __len__(self):
-        return self.portfolio.n_samples
+        return self.portfolio.n_samples - self.start_index - self.window_size
 
     def __getitem__(self, idx):
         m_noncash_assets = self.portfolio.m_noncash_assets

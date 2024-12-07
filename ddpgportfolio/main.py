@@ -37,7 +37,7 @@ def main():
 
     portfolio = Portfolio(asset_names=asset_names)
 
-    agent = DDPGAgent(portfolio, BATCH_SIZE, WINDOW_SIZE, STEP_SIZE, 2)
+    agent = DDPGAgent(portfolio, BATCH_SIZE, WINDOW_SIZE, STEP_SIZE, 15)
     agent.train()
 
 

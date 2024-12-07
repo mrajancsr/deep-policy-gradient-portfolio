@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
@@ -5,7 +6,6 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch_snippets.torch_loader import Report
 
 from ddpgportfolio.agent.models import Actor, Critic
 from ddpgportfolio.dataset import (
@@ -13,6 +13,7 @@ from ddpgportfolio.dataset import (
 )
 from ddpgportfolio.memory.memory import ExperienceReplayMemory, PortfolioVectorMemory
 from ddpgportfolio.portfolio.portfolio import Portfolio
+from utilities.noise import OrnsteinUhlenbeckNoise
 
 torch.set_default_device("mps")
 
@@ -39,6 +40,7 @@ class DDPGAgent:
     dataloader: DataLoader = field(init=False)
     pvm: PortfolioVectorMemory = field(init=False)
     replay_memory: ExperienceReplayMemory = field(init=False)
+    ou_noise: OrnsteinUhlenbeckNoise = field(init=False)
     gamma: float = 0.90
     tau: float = 0.005
 
@@ -60,10 +62,10 @@ class DDPGAgent:
         self.target_actor = self.clone_network(self.actor)
         self.target_critic = self.clone_network(self.critic)
         self.actor_optimizer = torch.optim.Adam(
-            self.actor.parameters(), lr=self.learning_rate, betas=self.betas
+            self.actor.parameters(), lr=0.0001, betas=self.betas, weight_decay=1e-5
         )
         self.critic_optimizer = torch.optim.Adam(
-            self.critic.parameters(), lr=self.learning_rate, betas=self.betas
+            self.critic.parameters(), lr=0.001, betas=self.betas, weight_decay=1e-5
         )
         self.actor.to(self.device)
         self.critic.to(self.device)
@@ -80,6 +82,7 @@ class DDPGAgent:
         )
         self.replay_memory = ExperienceReplayMemory()
         self.update_target_networks()
+        self.ou_noise = OrnsteinUhlenbeckNoise(1)
 
     def clone_network(self, network):
         cloned_network = type(network)()
@@ -92,7 +95,7 @@ class DDPGAgent:
         with torch.no_grad():
             action = self.actor(state)
         self.actor.train()
-        return action
+        return action + self.ou_noise.sample()
 
     def update_target_networks(self):
         self.soft_update(self.target_actor, self.actor, self.tau)
@@ -170,15 +173,19 @@ class DDPGAgent:
         return critic_loss.item()
 
     def train(self):
-        log = Report(self.n_epochs)
-        n = len(self.dataloader)
-
+        print("Training Started for DDPG Agent")
         for epoch in range(self.n_epochs):
-            avg_reward_per_batch = 0
+            start_time = time.perf_counter()
+            total_actor_loss = 0
+            total_critic_loss = 0
+            total_reward = 0
             total_batches = 0
 
             for idx_batch, (xt_batch, prev_index_batch) in enumerate(self.dataloader):
-                for i in range(1, self.batch_size):
+                batch_actor_loss = 0
+                batch_critic_loss = 0
+                mini_batch_size = xt_batch.shape[0]
+                for i in range(1, mini_batch_size):
                     xt, xt_next = xt_batch[i - 1], xt_batch[i]
                     prev_index, next_index = (
                         prev_index_batch[i - 1],
@@ -208,24 +215,30 @@ class DDPGAgent:
                         state, action, reward, next_state = self.replay_memory.sample()
                     # train the critic
                     critic_loss = self.train_critic(state, action, reward, next_state)
-
+                    batch_critic_loss += critic_loss
                     # train the actor
                     actor_loss = self.train_actor(state)
-
+                    batch_actor_loss += actor_loss
                     self.update_target_networks()
-                    avg_reward_per_batch += reward.mean()
-                    total_batches += 1
+                    total_reward += reward.item()
+                total_batches += 1
 
-                pos = (epoch + 1 + idx_batch) / n
-                log.record(
-                    pos,
-                    critic_loss=critic_loss,
-                    actor_loss=actor_loss,
-                    end="\r",
+                print(
+                    f"Batch {idx_batch + 1} - Actor Loss: {batch_actor_loss / mini_batch_size:.4f}, Critic Loss: {batch_critic_loss / self.batch_size:.4f}"
                 )
-            log.report_avgs(epoch + 1)
-            avg_reward_per_batch /= total_batches
-        log.plot()
+
+            total_critic_loss += batch_critic_loss / mini_batch_size
+            total_actor_loss += batch_actor_loss / mini_batch_size
+            avg_reward = total_reward / total_batches
+
+            # Log batch-specific losses (optional)
+            print(
+                f"Batch {idx_batch + 1} - Actor Loss: {batch_actor_loss / self.batch_size:.4f}, Critic Loss: {batch_critic_loss / self.batch_size:.4f}"
+            )
+
+        # After processing the entire dataset or epoch, log total losses
+        print(f"Total Actor Loss for Epoch: {total_actor_loss:.4f}")
+        print(f"Total Critic Loss for Epoch: {total_critic_loss:.4f}")
 
 
 def plot_losses(actor_losses, critic_losses):
