@@ -1,1 +1,1 @@
-# deep-deterministic-policy-gradient-portfolio
+# Deep-Deterministic-Policy-Gradient-Portfolio
