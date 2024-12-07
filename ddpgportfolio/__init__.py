@@ -1,1 +1,1 @@
-from ddpgportfolio.asset import Asset  # noqa
+from ddpgportfolio.portfolio.asset import Asset  # noqa

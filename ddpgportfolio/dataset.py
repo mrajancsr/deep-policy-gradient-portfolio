@@ -3,7 +3,7 @@ from typing import Generator, Iterator
 import torch
 from torch.utils.data import DataLoader, Dataset, Sampler
 
-from ddpgportfolio.portfolio import Portfolio
+from ddpgportfolio.portfolio.portfolio import Portfolio
 
 
 class KrakenDataSet(Dataset):

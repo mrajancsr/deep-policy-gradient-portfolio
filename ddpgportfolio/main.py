@@ -8,8 +8,8 @@ from typing import List
 
 import torch
 
-from ddpgportfolio.ddpg_agent import DDPGAgent
-from ddpgportfolio.portfolio import Portfolio
+from ddpgportfolio.agent.ddpg_agent import DDPGAgent
+from ddpgportfolio.portfolio.portfolio import Portfolio
 
 torch.set_default_device("mps")
 
@@ -37,7 +37,7 @@ def main():
 
     portfolio = Portfolio(asset_names=asset_names)
 
-    agent = DDPGAgent(portfolio, BATCH_SIZE, WINDOW_SIZE, STEP_SIZE, 2000000)
+    agent = DDPGAgent(portfolio, BATCH_SIZE, WINDOW_SIZE, STEP_SIZE, 2)
     agent.train()
 
 

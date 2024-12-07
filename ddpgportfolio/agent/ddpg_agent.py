@@ -7,12 +7,12 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch_snippets.torch_loader import Report
 
+from ddpgportfolio.agent.models import Actor, Critic
 from ddpgportfolio.dataset import (
     KrakenDataSet,
 )
-from ddpgportfolio.memory import ExperienceReplayMemory, PortfolioVectorMemory
-from ddpgportfolio.models import Actor, Critic
-from ddpgportfolio.portfolio import Portfolio
+from ddpgportfolio.memory.memory import ExperienceReplayMemory, PortfolioVectorMemory
+from ddpgportfolio.portfolio.portfolio import Portfolio
 
 torch.set_default_device("mps")
 
@@ -39,7 +39,7 @@ class DDPGAgent:
     dataloader: DataLoader = field(init=False)
     pvm: PortfolioVectorMemory = field(init=False)
     replay_memory: ExperienceReplayMemory = field(init=False)
-    gamma: float = 0.99
+    gamma: float = 0.90
     tau: float = 0.005
 
     def __post_init__(self):
@@ -197,7 +197,9 @@ class DDPGAgent:
 
                     # get the relative price vector from price tensor to calculate reward
                     yt = 1 / xt[0, :, -2]
-                    reward = self.portfolio.get_reward(action, yt, previous_action) * self.portfolio.get_initial_portfolio_value()
+                    reward = (
+                        self.portfolio.get_reward(action, yt, previous_action) * 100.0
+                    )
                     next_state = (xt_next, action)
                     self.replay_memory.add(state, action, reward, next_state)
 

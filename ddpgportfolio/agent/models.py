@@ -39,7 +39,9 @@ class Actor(nn.Module):
             nn.Conv2d(2, 20, kernel_size=(1, 48), stride=1, padding=(0, 0)),
             nn.LeakyReLU(0.01, inplace=True),
         )
-        self.conv_layer_with_weights = nn.Sequential(nn.Conv2d(21, 1, kernel_size=(1, 1), stride=1))
+        self.conv_layer_with_weights = nn.Sequential(
+            nn.Conv2d(21, 1, kernel_size=(1, 1), stride=1)
+        )
         self.cash_bias = nn.Parameter(torch.full((1, 1, 1), 0.7))
         self.softmax = nn.Softmax(dim=1)
         self.apply(weights_init)
@@ -75,7 +77,7 @@ class Actor(nn.Module):
         cash_bias = self.cash_bias.expand(1, 1, 1)
         x = torch.cat([cash_bias, x], dim=1)
         current_weights = self.softmax(x).view(-1)
-        
+
         # return only non-cash weights
         return current_weights[1:]
 
@@ -104,12 +106,12 @@ class Critic(nn.Module):
         self.conv_layer_with_weights = nn.Sequential(
             nn.Conv2d(21, 20, kernel_size=(1, 1), stride=1),
             nn.LeakyReLU(0.01, inplace=True),
+            nn.Flatten(),
         )
         self.q_layer = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(20*m_assets, 128),
+            nn.Linear(20 * m_assets + m_assets, 128),
             nn.LeakyReLU(0.01, inplace=True),
-            nn.Linear(128, 1)
+            nn.Linear(128, 1),
         )
 
         self.apply(weights_init)
@@ -145,8 +147,8 @@ class Critic(nn.Module):
         x = self.conv_layer_with_weights(x)
 
         # add current weights as q value evaluates state and action
-        x = torch.cat([x, current_weights])
-        
+        x = torch.cat([x.view(-1), current_weights])
+
         # estimate the q value
         q_value = self.q_layer(x)
-        return q_value.view(-1)
+        return q_value
