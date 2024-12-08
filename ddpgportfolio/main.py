@@ -15,9 +15,10 @@ torch.set_default_device("mps")
 
 
 def main():
-    BATCH_SIZE = 50  # training is done in mini-batches
-    WINDOW_SIZE = 50  # last n trading days for the price tensor
+    BATCH_SIZE = 100  # training is done in mini-batches
+    WINDOW_SIZE = 50  # last n timesteps for the price tensor
     STEP_SIZE = 1  # for rolling window batch sampler
+    start_date = "2024-08-01"
     DEVICE = "mps"
 
     asset_names: List[str] = [
@@ -35,9 +36,9 @@ def main():
         "MATIC",
     ]
 
-    portfolio = Portfolio(asset_names=asset_names)
+    portfolio = Portfolio(asset_names=asset_names, start_date=start_date)
 
-    agent = DDPGAgent(portfolio, BATCH_SIZE, WINDOW_SIZE, STEP_SIZE, 15)
+    agent = DDPGAgent(portfolio, BATCH_SIZE, WINDOW_SIZE, STEP_SIZE, 5)
     agent.train()
 
 

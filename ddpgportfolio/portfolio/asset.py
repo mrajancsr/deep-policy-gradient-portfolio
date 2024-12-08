@@ -26,8 +26,8 @@ class Asset:
     def __post_init__(self) -> None:
         self.size = self.open_price.shape[0]
         self.price_relative_vector = (
-            self.close_price / self.close_price.shift(1)
-        ).to_numpy()
+            (self.close_price / self.close_price.shift(1)).dropna().to_numpy()
+        )
         self.returns_history = np.log(self.price_relative_vector)
         self.annualized_returns = (
             self.returns_history.sum()

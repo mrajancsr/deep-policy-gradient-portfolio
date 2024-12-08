@@ -29,6 +29,7 @@ class Portfolio:
     """
 
     asset_names: List[str]
+    start_date: str
     __prices: Dict[str, pd.DataFrame] = field(init=False, default_factory=lambda: {})
     __assets: Dict[str, Asset] = field(init=False)
     __initial_port: float = 10000
@@ -40,10 +41,10 @@ class Portfolio:
         self.__assets = {
             asset_name: Asset(
                 name=asset_name,
-                open_price=self.__prices["open"][asset_name],
-                close_price=self.__prices["close"][asset_name],
-                high_price=self.__prices["high"][asset_name],
-                low_price=self.__prices["low"][asset_name],
+                open_price=self.__prices["open"][asset_name].loc[self.start_date :,],
+                close_price=self.__prices["close"][asset_name].loc[self.start_date :],
+                high_price=self.__prices["high"][asset_name].loc[self.start_date :],
+                low_price=self.__prices["low"][asset_name].loc[self.start_date :],
             )
             for asset_name in self.asset_names
         }
@@ -61,7 +62,7 @@ class Portfolio:
     def __repr__(self) -> str:
         return f"Portfolio size: {self.m_assets} \
             \nm_assets: {[asset.name for asset in self.assets()]}"
-    
+
     def get_initial_portfolio_value(self):
         return self.__initial_port
 
@@ -84,16 +85,16 @@ class Portfolio:
         yield from self.__assets.values()
 
     def get_relative_price(self):
-        return self.__prices["relative_price"]
+        return self.__prices["relative_price"].loc[self.start_date :]
 
     def get_close_price(self):
-        return self.__prices["close"]
+        return self.__prices["close"].loc[self.start_date :]
 
     def get_high_price(self):
-        return self.__prices["high"]
+        return self.__prices["high"].loc[self.start_date :]
 
     def get_low_price(self):
-        return self.__prices["low"]
+        return self.__prices["low"].loc[self.start_date :]
 
     def get_end_of_period_weights(self, yt: torch.tensor, wt_prev: torch.tensor):
         """Computes the wt' which is portfolio weight at the end of period t
