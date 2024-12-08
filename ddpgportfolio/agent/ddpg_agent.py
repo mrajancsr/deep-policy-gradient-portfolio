@@ -1,4 +1,3 @@
-import time
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
@@ -62,10 +61,14 @@ class DDPGAgent:
         self.target_actor = self.clone_network(self.actor)
         self.target_critic = self.clone_network(self.critic)
         self.actor_optimizer = torch.optim.Adam(
-            self.actor.parameters(), lr=0.0001, betas=self.betas, weight_decay=1e-5
+            self.actor.parameters(),
+            lr=self.learning_rate,
+            weight_decay=1e-5,
         )
         self.critic_optimizer = torch.optim.Adam(
-            self.critic.parameters(), lr=0.001, betas=self.betas, weight_decay=1e-5
+            self.critic.parameters(),
+            lr=self.learning_rate,
+            weight_decay=1e-5,
         )
         self.actor.to(self.device)
         self.critic.to(self.device)
@@ -95,7 +98,7 @@ class DDPGAgent:
         with torch.no_grad():
             action = self.actor(state)
         self.actor.train()
-        return action + self.ou_noise.sample()
+        return action
 
     def update_target_networks(self):
         self.soft_update(self.target_actor, self.actor, self.tau)
@@ -174,8 +177,15 @@ class DDPGAgent:
 
     def train(self):
         print("Training Started for DDPG Agent")
+        # scheduler to perform learning rate decay
+        critic_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            self.critic_optimizer, gamma=0.95
+        )
+        actor_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            self.actor_optimizer, gamma=0.95
+        )
         for epoch in range(self.n_epochs):
-            start_time = time.perf_counter()
+
             total_actor_loss = 0
             total_critic_loss = 0
             total_reward = 0
@@ -205,7 +215,8 @@ class DDPGAgent:
                     # get the relative price vector from price tensor to calculate reward
                     yt = 1 / xt[0, :, -2]
                     reward = (
-                        self.portfolio.get_reward(action, yt, previous_action) * 100.0
+                        self.portfolio.get_reward(action, yt, previous_action)
+                        * self.portfolio.get_initial_portfolio_value()
                     )
                     next_state = (xt_next, action)
                     self.replay_memory.add(state, action, reward, next_state)
@@ -229,16 +240,20 @@ class DDPGAgent:
 
             total_critic_loss += batch_critic_loss / mini_batch_size
             total_actor_loss += batch_actor_loss / mini_batch_size
-            avg_reward = total_reward / total_batches
+            # avg_reward = total_reward / total_batches
 
             # Log batch-specific losses (optional)
             print(
                 f"Batch {idx_batch + 1} - Actor Loss: {batch_actor_loss / self.batch_size:.4f}, Critic Loss: {batch_critic_loss / self.batch_size:.4f}"
             )
-
+            # Step the scheduler to adjust the learning rate
+            critic_scheduler.step()
+            actor_scheduler.step()
         # After processing the entire dataset or epoch, log total losses
         print(f"Total Actor Loss for Epoch: {total_actor_loss:.4f}")
         print(f"Total Critic Loss for Epoch: {total_critic_loss:.4f}")
+        print("Done Training")
+        print("Stop")
 
 
 def plot_losses(actor_losses, critic_losses):

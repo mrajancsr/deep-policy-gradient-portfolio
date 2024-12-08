@@ -15,11 +15,11 @@ torch.set_default_device("mps")
 
 
 def main():
-    BATCH_SIZE = 100  # training is done in mini-batches
+    BATCH_SIZE = 50  # training is done in mini-batches
     WINDOW_SIZE = 50  # last n timesteps for the price tensor
     STEP_SIZE = 1  # for rolling window batch sampler
-    start_date = "2024-08-01"
-    DEVICE = "mps"
+    start_date = "2024-08-01"  # start date of trading
+    # DEVICE = "mps"
 
     asset_names: List[str] = [
         "CASH",

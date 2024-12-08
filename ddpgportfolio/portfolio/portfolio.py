@@ -50,7 +50,7 @@ class Portfolio:
         }
         self.m_assets = len(self.__assets)
         self.m_noncash_assets = self.m_assets - 1
-        self.n_samples = self.__prices["close"].shape[0]
+        self.n_samples = self.__prices["close"].loc[self.start_date :,].shape[0]
 
     def _load_pickle_object(self):
         with open(PATH_TO_PRICES_PICKLE, "rb") as f:
