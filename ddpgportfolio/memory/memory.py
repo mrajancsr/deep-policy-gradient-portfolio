@@ -69,11 +69,12 @@ class Experience:
     action: torch.tensor
     reward: torch.tensor
     next_state: Tuple[torch.tensor, torch.tensor]
+    previous_index: torch.tensor
 
     def __repr__(self):
         return f"Close Price: {self.state[0][0, :2, -2]}\
             \naction {self.state[1][:2]}\
-            \nreward {self.reward.item():.4f}"
+            \nreward {self.reward:.4f}"
 
 
 @dataclass
@@ -91,7 +92,7 @@ class PrioritizedReplayMemory:
     device: Optional[str] = "mps"
     __buffer: List[Experience] = field(init=False, default_factory=lambda: [])
     pos: int = field(init=False, default=0)
-    __priorities: List[Experience] = field(init=False, default_factory=lambda: [])
+    __priorities: List[float] = field(init=False, default_factory=lambda: [])
 
     def __repr__(self):
         return f"Total Experiences: {len(self.__buffer)}"
@@ -102,7 +103,7 @@ class PrioritizedReplayMemory:
     def peek(self):
         return self.__buffer[-1]
 
-    def add(self, experience: Experience, reward: torch.tensor):
+    def add(self, experience: Experience, reward: float):
         """_summary_
 
         Parameters
@@ -125,7 +126,9 @@ class PrioritizedReplayMemory:
 
         self.pos = (self.pos + 1) % self.capacity
 
-    def sample(self, batch_size, beta=0.4):
+    def sample(
+        self, batch_size, beta=0.4
+    ) -> Tuple[Tuple[Experience, torch.tensor, np.ndarray]]:
         """Sample a batch of experiences based on priority."""
         # Decay alpha and beta over time
         self.alpha = max(
@@ -135,22 +138,23 @@ class PrioritizedReplayMemory:
 
         # Normalize the priorities and calculate the probabilities
         priorities = np.array(self.__priorities) ** self.alpha
-        prob = priorities / np.sum(priorities)
+        prob = priorities / priorities.sum()
 
         # Sample batch of experiences based on the probabilities
-        indices = np.random.choice(len(self.__buffer), batch_size, p=prob)
+        indices = np.random.choice(len(self), batch_size, p=prob)
 
         # Compute importance-sampling weights (using beta)
         weights = (len(self.__buffer) * prob[indices]) ** (-self.beta)
         weights /= weights.max()  # Normalize to avoid large weights
 
         # Extract the actual experiences from the buffer using the indices
-        batch = [self.buffer[idx] for idx in indices]
+        experiences = [self.__buffer[idx] for idx in indices]
+
         weights = torch.tensor(
             weights, dtype=torch.float32
         )  # Convert weights to torch tensor
 
-        return batch, indices, weights
+        return experiences, indices, weights
 
     def update_priorities(self, indices, td_errors):
         for idx, td_error in zip(indices, td_errors):

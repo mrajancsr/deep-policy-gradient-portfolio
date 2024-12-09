@@ -40,8 +40,11 @@ def main():
     portfolio = Portfolio(asset_names=asset_names, start_date=start_date)
     kraken_ds = KrakenDataSet(portfolio, WINDOW_SIZE)
     agent = DDPGAgent(portfolio, BATCH_SIZE, WINDOW_SIZE, STEP_SIZE, 5)
-    # agent.train()
+
+    # need to pretrain the agent to populate the replay buffer with experiences
     agent.pre_train()
+    # train the agent
+    agent.train()
 
 
 if __name__ == "__main__":

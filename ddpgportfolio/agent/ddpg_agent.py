@@ -30,7 +30,7 @@ class DDPGAgent:
     batch_size: int
     window_size: int
     step_size: int
-    n_epochs: int
+    n_episodes: int
     learning_rate: Optional[float] = 3e-5
     betas: Optional[Tuple[float, float]] = (0.0, 0.9)
     device: Optional[str] = "mps"
@@ -99,13 +99,18 @@ class DDPGAgent:
         cloned_network.load_state_dict(network.state_dict())
         return cloned_network
 
-    def select_action(self, state):
+    def select_action(self, state, exploration: bool = False):
         """Select action using the actor's policy (deterministic action)"""
         self.actor.eval()  # Ensure the actor is in evaluation mode
         with torch.no_grad():
-            action = self.actor(state)
-        self.actor.train()
-        return action
+            action_logits = self.actor(state)
+        if exploration:
+            noise = self.ou_noise.sample()
+            action = torch.softmax(action_logits.view(-1) + noise, dim=0)
+        else:
+            action = torch.softmax(action_logits, dim=0)
+        # return all non-cash weights
+        return action[1:]
 
     def update_target_networks(self):
         self.soft_update(self.target_actor, self.actor, self.tau)
@@ -134,8 +139,15 @@ class DDPGAgent:
 
     def train_actor(self, state: Tuple[torch.tensor, torch.tensor]):
         self.actor_optimizer.zero_grad()
-        predicted_actions = self.actor(state)
-
+        logits = self.actor(state)
+        logits = logits.squeeze(1).squeeze(2)
+        predicted_actions = torch.softmax(logits, dim=1)
+        xt, previous_noncash_actions = state
+        cash_weight_previous = 1 - previous_noncash_actions.sum(dim=1)
+        previous_action = torch.cat(
+            [cash_weight_previous.unsqueeze(1), previous_noncash_actions], dim=1
+        )
+        state = (xt, previous_action)
         # compute the actor loss using deterministic policy gradient
         q_values = self.critic(state, predicted_actions).mean()
         actor_loss = -q_values.mean()
@@ -193,15 +205,17 @@ class DDPGAgent:
             previous_action = self.pvm.get_memory_stack(prev_index)
             state = (xt, previous_action)
             # get current weight from actor network given s = (Xt, wt_prev)
-            action = self.select_action(state)
+            action = self.select_action(state, exploration=True)
             # store the current action into pvm
             self.pvm.update_memory_stack(action.detach(), prev_index + 1)
             # get the relative price vector from price tensor to calculate reward
             yt = 1 / xt[0, :, -2]
             reward = self.portfolio.get_reward(action, yt, previous_action) * 100
             next_state = (kraken_ds[i], action)
-            experience = Experience(state, action, reward, next_state)
-            self.replay_memory.add(experience=experience, reward=reward)
+            experience = Experience(
+                state, action, reward.item(), next_state, prev_index
+            )
+            self.replay_memory.add(experience=experience, reward=reward.item())
         print("pretraining done")
         print(f"buffer size: {len(self.replay_memory)}")
         # we subtract one since each experience consists of current state and next state
@@ -219,76 +233,44 @@ class DDPGAgent:
         actor_scheduler = torch.optim.lr_scheduler.ExponentialLR(
             self.actor_optimizer, gamma=0.95
         )
-        for epoch in range(self.n_epochs):
+        for episode in range(self.n_episodes):
 
             total_actor_loss = 0
             total_critic_loss = 0
             total_reward = 0
             total_batches = 0
+            batch_actor_loss = 0
+            batch_critic_loss = 0
 
-            for idx_batch, (xt_batch, prev_index_batch) in enumerate(self.dataloader):
-                batch_actor_loss = 0
-                batch_critic_loss = 0
-                mini_batch_size = xt_batch.shape[0]
-                for i in range(1, mini_batch_size):
-                    xt, xt_next = xt_batch[i - 1], xt_batch[i]
-                    prev_index, next_index = (
-                        prev_index_batch[i - 1],
-                        prev_index_batch[i],
-                    )
-
-                    # get the previous weights from portfolio vector memory
-                    previous_action = self.pvm.get_memory_stack(prev_index)
-                    state = (xt, previous_action)
-
-                    # get current weight from actor network given s = (Xt, wt_prev)
-                    action = self.select_action(state)
-
-                    # store the current action back into pvm
-                    self.pvm.update_memory_stack(action.detach(), next_index)
-
-                    # get the relative price vector from price tensor to calculate reward
-                    yt = 1 / xt[0, :, -2]
-                    reward = (
-                        self.portfolio.get_reward(action, yt, previous_action)
-                        * self.portfolio.get_initial_portfolio_value()
-                    )
-                    next_state = (xt_next, action)
-                    self.replay_memory.add(state, action, reward, next_state)
-
-                    # we sample every 10 time steps
-                    if i % 10 == 0:
-                        state, action, reward, next_state = self.replay_memory.sample()
-                    # train the critic
-                    critic_loss = self.train_critic(state, action, reward, next_state)
-                    batch_critic_loss += critic_loss
-                    # train the actor
-                    actor_loss = self.train_actor(state)
-                    batch_actor_loss += actor_loss
-                    self.update_target_networks()
-                    total_reward += reward.item()
-                total_batches += 1
-
-                print(
-                    f"Batch {idx_batch + 1} - Actor Loss: {batch_actor_loss / mini_batch_size:.4f}, Critic Loss: {batch_critic_loss / self.batch_size:.4f}"
-                )
-
-            total_critic_loss += batch_critic_loss / mini_batch_size
-            total_actor_loss += batch_actor_loss / mini_batch_size
-            # avg_reward = total_reward / total_batches
-
-            # Log batch-specific losses (optional)
-            print(
-                f"Batch {idx_batch + 1} - Actor Loss: {batch_actor_loss / self.batch_size:.4f}, Critic Loss: {batch_critic_loss / self.batch_size:.4f}"
+            experiences, weights, indices = self.replay_memory.sample(self.batch_size)
+            state, action, reward, next_state, prev_index = zip(
+                *[
+                    (e.state, e.action, e.reward, e.next_state, e.previous_index)
+                    for e in experiences
+                ]
             )
-            # Step the scheduler to adjust the learning rate
-            critic_scheduler.step()
-            actor_scheduler.step()
-        # After processing the entire dataset or epoch, log total losses
-        print(f"Total Actor Loss for Epoch: {total_actor_loss:.4f}")
-        print(f"Total Critic Loss for Epoch: {total_critic_loss:.4f}")
-        print("Done Training")
-        print("Stop")
+            xt = torch.stack([s[0] for s in state])
+            previous_action = torch.stack([s[1] for s in state])
+
+            reward = torch.tensor(reward, dtype=torch.float32)
+            action = torch.stack(action)
+            prev_index = torch.tensor(prev_index)
+            state = (xt, previous_action)
+
+            # compute the actor loss
+            actor_loss = self.train_actor(state)
+
+            # store the current action back into pvm
+            self.pvm.update_memory_stack(action.detach(), next_index)
+
+            # get the relative price vector from price tensor to calculate reward
+            yt = 1 / xt[0, :, -2]
+            reward = (
+                self.portfolio.get_reward(action, yt, previous_action)
+                * self.portfolio.get_initial_portfolio_value()
+            )
+            next_state = (xt_next, action)
+            self.replay_memory.add(state, action, reward, next_state)
 
 
 def plot_losses(actor_losses, critic_losses):

@@ -69,17 +69,29 @@ class Actor(nn.Module):
         x = self.conv_layer(price_tensor)
 
         # add previous weights to next conv layer
-        prev_weights = prev_weights.unsqueeze(0).unsqueeze(2)
-        x = torch.cat([x, prev_weights], dim=0)
+        if price_tensor.dim() == 3:
+            # only one example
+            dim = 0
+            prev_weights = prev_weights.unsqueeze(0).unsqueeze(2)
+            x = torch.cat([x, prev_weights], dim=dim)
+            cash_bias = self.cash_bias.expand(1, 1, 1)
+            dim += 1
+        else:
+            # we have a batch of examples now
+            dim = 1
+            prev_weights = prev_weights.unsqueeze(1).unsqueeze(3)
+            x = torch.cat([x, prev_weights], dim=dim)
+            batch_size = x.shape[0]
+            cash_bias = self.cash_bias.expand(batch_size, 1, 1, 1)
+            dim += 1
+
         x = self.conv_layer_with_weights(x)
 
         # add a cash bias to the layer before voting
-        cash_bias = self.cash_bias.expand(1, 1, 1)
-        x = torch.cat([cash_bias, x], dim=1)
-        current_weights = self.softmax(x).view(-1)
+        logits = torch.cat([cash_bias, x], dim=dim)
+        # current_weights = self.softmax(x).view(-1)
 
-        # return only non-cash weights
-        return current_weights[1:]
+        return logits
 
 
 class Critic(nn.Module):
@@ -102,15 +114,16 @@ class Critic(nn.Module):
             nn.LeakyReLU(0.01, inplace=True),
             nn.Conv2d(2, 20, kernel_size=(1, 48), stride=1, padding=(0, 0)),
             nn.LeakyReLU(0.01, inplace=True),
-        )
-        self.conv_layer_with_weights = nn.Sequential(
-            nn.Conv2d(21, 20, kernel_size=(1, 1), stride=1),
-            nn.LeakyReLU(0.01, inplace=True),
             nn.Flatten(),
         )
+
+        # fully connected layer for actions
+        self.fc_layer = nn.Sequential(nn.Linear(24, 64), nn.ReLU(True))
+
+        # q layer to evaluate the state and action
         self.q_layer = nn.Sequential(
-            nn.Linear(20 * m_assets + m_assets, 128),
-            nn.LeakyReLU(0.01, inplace=True),
+            nn.Linear(20 * m_assets + 64, 128),
+            nn.ReLU(True),
             nn.Linear(128, 1),
         )
 
@@ -138,17 +151,16 @@ class Critic(nn.Module):
         torch.tensor
             _description_
         """
-        price_tensor, prev_weights = state
-        x = self.conv_layer(price_tensor)
+        xt, prev_weights = state
+        price_features = self.conv_layer(xt)
 
-        # add previous weights to next conv layer
-        prev_weights = prev_weights.unsqueeze(0).unsqueeze(2)
-        x = torch.cat([x, prev_weights], dim=0)
-        x = self.conv_layer_with_weights(x)
+        # process actions
+        actions = torch.cat([current_weights, prev_weights], dim=-1)
+        action_features = self.fc_layer(actions)
 
-        # add current weights as q value evaluates state and action
-        x = torch.cat([x.view(-1), current_weights])
+        # combine features
+        combined = torch.cat([price_features, action_features], dim=-1)
 
         # estimate the q value
-        q_value = self.q_layer(x)
-        return q_value
+        q_value = self.q_layer(combined)
+        return q_value.view(-1)
