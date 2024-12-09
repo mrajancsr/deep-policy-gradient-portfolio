@@ -57,80 +57,12 @@ class KrakenDataSet(Dataset):
         return xt, end - 2
 
 
-class SlidingWindowBatchSampler(Sampler):
-    """
-    A custom BatchSampler that samples batches of size `batch_size` from KrakenDataSet
-    using a sliding window approach.
-    """
+class PriorizedReplayDataset(Dataset):
+    def __init__(self, replay_buffer):
+        self.replay_buffer = replay_buffer
 
-    def __init__(
-        self, dataset: KrakenDataSet, batch_size: int = 50, step_size: int = 1
-    ):
-        """
-        Parameters
-        ----------
-        dataset : KrakenDataSet
-            The KrakenDataSet Object
-        batch_size : int, optional
-            size of the batch, default=50
-        step_size : int, optional
-            the step size for sliding window, default=1
-        """
+    def __len__(self):
+        return len(self.replay_buffer)
 
-        self.dataset = dataset
-        self.batch_size = batch_size
-        self.step_size = step_size
-
-        # we are getting data from dataset, so first index starts at index 0
-        self.start_index = 0
-        # The end index is dataset size
-        self.end_index = len(dataset)  # the number of observations in your dataset
-
-    def __iter__(self) -> Iterator[int]:
-        """
-        Yield batches of indices to sample from the dataset.
-        Each batch contains indices from [i, i+batch_size).
-        """
-        # Start iterating from the start index (49)
-        for i in range(
-            self.start_index, self.end_index - self.batch_size + 1, self.step_size
-        ):
-            # Each batch will be a list of indices [i, i+batch_size)
-            yield list(range(i, i + self.batch_size))
-
-    def __len__(self) -> int:
-        """Returns the number of batches."""
-        return (self.end_index - self.batch_size) // self.step_size + 1
-
-
-def get_current_and_next_batch(
-    kraken_dl: DataLoader,
-) -> Generator[torch.tensor, torch.tensor, torch.tensor]:
-    """Creates an iterator for dataloader
-
-    Parameters
-    ----------
-    kraken_dl : DataLoader
-        dataloader that contains the current batch of price tensor Xt,
-        and the previous index given by t-1
-
-    Yields
-    ------
-    Generator[torch.tensor, torch.tensor, torch.tensor]
-        current batch of price tensor Xt
-        next batch of price tensor X(t+1)
-        previous index given by t-1
-    """
-    iterator = iter(kraken_dl)
-
-    # get the first batch
-    xt_batch, previous_index_batch = next(iterator)
-
-    while True:
-        try:
-            xt_next_batch, current_index_batch = next(iterator)
-
-            yield xt_batch, xt_next_batch, previous_index_batch
-            xt_batch, previous_index_batch = xt_next_batch, current_index_batch
-        except StopIteration:
-            break
+    def __getitem__(self, idx):
+        return self.replay_buffer[idx]

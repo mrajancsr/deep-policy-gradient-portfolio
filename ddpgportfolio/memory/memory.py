@@ -1,6 +1,6 @@
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -61,3 +61,99 @@ class ExperienceReplayMemory:
     def sample(self) -> Tuple:
         idx = np.random.choice(len(self.buffer), replace=False)
         return self.buffer[idx]
+
+
+@dataclass
+class Experience:
+    state: Tuple[torch.tensor, torch.tensor]
+    action: torch.tensor
+    reward: torch.tensor
+    next_state: Tuple[torch.tensor, torch.tensor]
+
+    def __repr__(self):
+        return f"Close Price: {self.state[0][0, :2, -2]}\
+            \naction {self.state[1][:2]}\
+            \nreward {self.reward.item():.4f}"
+
+
+@dataclass
+class PrioritizedReplayMemory:
+    """Implements the Prioritized Experience Replay of Schaul, Quan et al (2016)
+    https://arxiv.org/pdf/1511.05952
+    by prioritizing experiences with better rewards
+    """
+
+    capacity: int
+    alpha: Optional[float] = 0.6
+    epsilon: Optional[float] = 1e-5
+    beta_decay_rate: Optional[float] = 0.01
+    alpha_decay_rate: Optional[float] = 0.001
+    device: Optional[str] = "mps"
+    __buffer: List[Experience] = field(init=False, default_factory=lambda: [])
+    pos: int = field(init=False, default=0)
+    __priorities: List[Experience] = field(init=False, default_factory=lambda: [])
+
+    def __repr__(self):
+        return f"Total Experiences: {len(self.__buffer)}"
+
+    def __len__(self):
+        return len(self.__buffer)
+
+    def peek(self):
+        return self.__buffer[-1]
+
+    def add(self, experience: Experience, reward: torch.tensor):
+        """_summary_
+
+        Parameters
+        ----------
+        experience : Experience
+            _description_
+        reward : torch.tensor
+            _description_
+        """
+        priority = abs(reward) + self.epsilon
+
+        if len(self.__buffer) < self.capacity:
+            # add experiencs and their priority
+            self.__buffer.append(experience)
+            self.__priorities.append(priority)
+        else:
+            # overwrite experience at position pos
+            self.__buffer[self.pos] = experience
+            self.__priorities[self.pos] = priority
+
+        self.pos = (self.pos + 1) % self.capacity
+
+    def sample(self, batch_size, beta=0.4):
+        """Sample a batch of experiences based on priority."""
+        # Decay alpha and beta over time
+        self.alpha = max(
+            0.1, self.alpha - self.alpha_decay_rate
+        )  # Ensure alpha doesn't go below 0.1
+        self.beta = min(1.0, beta + self.beta_decay_rate)  # Gradually increase beta
+
+        # Normalize the priorities and calculate the probabilities
+        priorities = np.array(self.__priorities) ** self.alpha
+        prob = priorities / np.sum(priorities)
+
+        # Sample batch of experiences based on the probabilities
+        indices = np.random.choice(len(self.__buffer), batch_size, p=prob)
+
+        # Compute importance-sampling weights (using beta)
+        weights = (len(self.__buffer) * prob[indices]) ** (-self.beta)
+        weights /= weights.max()  # Normalize to avoid large weights
+
+        # Extract the actual experiences from the buffer using the indices
+        batch = [self.buffer[idx] for idx in indices]
+        weights = torch.tensor(
+            weights, dtype=torch.float32
+        )  # Convert weights to torch tensor
+
+        return batch, indices, weights
+
+    def update_priorities(self, indices, td_errors):
+        for idx, td_error in zip(indices, td_errors):
+            self.__priorities[idx] = (
+                abs(td_error) + self.epsilon
+            )  # Update priority based on TD-error

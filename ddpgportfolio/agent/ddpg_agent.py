@@ -10,7 +10,12 @@ from ddpgportfolio.agent.models import Actor, Critic
 from ddpgportfolio.dataset import (
     KrakenDataSet,
 )
-from ddpgportfolio.memory.memory import ExperienceReplayMemory, PortfolioVectorMemory
+from ddpgportfolio.memory.memory import (
+    Experience,
+    ExperienceReplayMemory,
+    PortfolioVectorMemory,
+    PrioritizedReplayMemory,
+)
 from ddpgportfolio.portfolio.portfolio import Portfolio
 from utilities.noise import OrnsteinUhlenbeckNoise
 
@@ -38,7 +43,7 @@ class DDPGAgent:
     loss_fn: nn.modules.loss.MSELoss = field(init=False)
     dataloader: DataLoader = field(init=False)
     pvm: PortfolioVectorMemory = field(init=False)
-    replay_memory: ExperienceReplayMemory = field(init=False)
+    replay_memory: PrioritizedReplayMemory = field(init=False)
     ou_noise: OrnsteinUhlenbeckNoise = field(init=False)
     gamma: float = 0.90
     tau: float = 0.005
@@ -83,7 +88,9 @@ class DDPGAgent:
         self.pvm.update_memory_stack(
             torch.zeros(m_noncash_assets), self.window_size - 2
         )
-        self.replay_memory = ExperienceReplayMemory()
+        self.replay_memory = PrioritizedReplayMemory(
+            capacity=100000,
+        )
         self.update_target_networks()
         self.ou_noise = OrnsteinUhlenbeckNoise(1)
 
@@ -175,7 +182,35 @@ class DDPGAgent:
         self.critic_optimizer.step()
         return critic_loss.item()
 
+    def pre_train(self):
+        """Pretraining the ddpg agent by populating the experience replay buffer"""
+        print("pre-training ddpg agent started...")
+        print("ReplayMemoryBuffer populating with experience...")
+        kraken_ds = KrakenDataSet(self.portfolio, self.window_size, self.step_size)
+        n_samples = len(kraken_ds)
+        for i in range(1, n_samples):
+            xt, prev_index = kraken_ds[i - 1]
+            previous_action = self.pvm.get_memory_stack(prev_index)
+            state = (xt, previous_action)
+            # get current weight from actor network given s = (Xt, wt_prev)
+            action = self.select_action(state)
+            # store the current action into pvm
+            self.pvm.update_memory_stack(action.detach(), prev_index + 1)
+            # get the relative price vector from price tensor to calculate reward
+            yt = 1 / xt[0, :, -2]
+            reward = self.portfolio.get_reward(action, yt, previous_action) * 100
+            next_state = (kraken_ds[i], action)
+            experience = Experience(state, action, reward, next_state)
+            self.replay_memory.add(experience=experience, reward=reward)
+        print("pretraining done")
+        print(f"buffer size: {len(self.replay_memory)}")
+        # we subtract one since each experience consists of current state and next state
+        assert len(self.replay_memory) == n_samples - 1
+
     def train(self):
+        if len(self.replay_memory) == 0:
+            raise Exception("replay memory is empty.  Please pre-train agent")
+
         print("Training Started for DDPG Agent")
         # scheduler to perform learning rate decay
         critic_scheduler = torch.optim.lr_scheduler.ExponentialLR(

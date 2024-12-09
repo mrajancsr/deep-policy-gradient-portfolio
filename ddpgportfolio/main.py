@@ -9,6 +9,7 @@ from typing import List
 import torch
 
 from ddpgportfolio.agent.ddpg_agent import DDPGAgent
+from ddpgportfolio.dataset import KrakenDataSet
 from ddpgportfolio.portfolio.portfolio import Portfolio
 
 torch.set_default_device("mps")
@@ -37,9 +38,10 @@ def main():
     ]
 
     portfolio = Portfolio(asset_names=asset_names, start_date=start_date)
-
+    kraken_ds = KrakenDataSet(portfolio, WINDOW_SIZE)
     agent = DDPGAgent(portfolio, BATCH_SIZE, WINDOW_SIZE, STEP_SIZE, 5)
-    agent.train()
+    # agent.train()
+    agent.pre_train()
 
 
 if __name__ == "__main__":
