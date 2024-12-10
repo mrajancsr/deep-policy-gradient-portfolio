@@ -159,8 +159,8 @@ class Critic(nn.Module):
         action_features = self.fc_layer(actions)
 
         # combine features
-        combined = torch.cat([price_features, action_features], dim=-1)
+        combined = torch.cat([price_features.view(-1), action_features], dim=-1)
 
         # estimate the q value
         q_value = self.q_layer(combined)
-        return q_value.view(-1)
+        return q_value

@@ -140,12 +140,11 @@ class DDPGAgent:
     def train_actor(self, state: Tuple[torch.tensor, torch.tensor]):
         self.actor_optimizer.zero_grad()
         logits = self.actor(state)
-        logits = logits.squeeze(1).squeeze(2)
-        predicted_actions = torch.softmax(logits, dim=1)
+        predicted_actions = torch.softmax(logits.view(-1), dim=-1)
         xt, previous_noncash_actions = state
-        cash_weight_previous = 1 - previous_noncash_actions.sum(dim=1)
+        cash_weight_previous = 1 - previous_noncash_actions.sum()
         previous_action = torch.cat(
-            [cash_weight_previous.unsqueeze(1), previous_noncash_actions], dim=1
+            [cash_weight_previous.unsqueeze(0), previous_noncash_actions], dim=0
         )
         state = (xt, previous_action)
         # compute the actor loss using deterministic policy gradient
@@ -156,7 +155,7 @@ class DDPGAgent:
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
-        return actor_loss.item()
+        return predicted_actions[1:], actor_loss.item()
 
     def train_critic(self, state, action, reward, next_state):
         """Train the critic network by minimizing the loss based on TD Error
@@ -188,11 +187,12 @@ class DDPGAgent:
 
         # compute the critic loss using MSE between predicted Q-values and target Q-values
         # Hence we are minimizing the TD Error
-        critic_loss = self.loss_fn(predicted_q_values, target_q_values)
+        td_error = predicted_q_values - target_q_values
+        critic_loss = torch.mean(td_error**2)
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
-        return critic_loss.item()
+        return td_error, critic_loss.item()
 
     def pre_train(self):
         """Pretraining the ddpg agent by populating the experience replay buffer"""
@@ -235,42 +235,39 @@ class DDPGAgent:
         )
         for episode in range(self.n_episodes):
 
-            total_actor_loss = 0
-            total_critic_loss = 0
-            total_reward = 0
-            total_batches = 0
-            batch_actor_loss = 0
-            batch_critic_loss = 0
+            # total_actor_loss = 0
+            # total_critic_loss = 0
+            # total_reward = 0
+            # total_batches = 0
+            # batch_actor_loss = 0
+            # batch_critic_loss = 0
 
             experiences, weights, indices = self.replay_memory.sample(self.batch_size)
-            state, action, reward, next_state, prev_index = zip(
-                *[
-                    (e.state, e.action, e.reward, e.next_state, e.previous_index)
-                    for e in experiences
-                ]
-            )
-            xt = torch.stack([s[0] for s in state])
-            previous_action = torch.stack([s[1] for s in state])
+            for experience in experiences:
+                # get the predicted action and update pvm
+                action, actor_loss = self.train_actor(experience.state)
+                self.pvm.update_memory_stack(action, experience.previous_index + 1)
 
-            reward = torch.tensor(reward, dtype=torch.float32)
-            action = torch.stack(action)
-            prev_index = torch.tensor(prev_index)
-            state = (xt, previous_action)
+                # get relative price vector to calculate reward
+                yt = 1 / experience.state[0][0, :, -2]
+                reward = (
+                    self.portfolio.get_reward(action, yt, experience.state[1])
+                    * self.portfolio.get_initial_portfolio_value()
+                )
 
-            # compute the actor loss
-            actor_loss = self.train_actor(state)
+                # create a new experience
+                xt, previous_action = experience.state
+                state = (xt, previous_action)
+                xt_next = experience.next_state[0]
+                next_state = (xt_next, action)
+                new_experience = Experience(state, action, reward, next_state)
 
-            # store the current action back into pvm
-            self.pvm.update_memory_stack(action.detach(), next_index)
+                td_errors, critic_loss = self.train_critic(
+                    state, action, reward, next_state
+                )
+                self.replay_memory.update_priorities(indices, td_errors)
 
-            # get the relative price vector from price tensor to calculate reward
-            yt = 1 / xt[0, :, -2]
-            reward = (
-                self.portfolio.get_reward(action, yt, previous_action)
-                * self.portfolio.get_initial_portfolio_value()
-            )
-            next_state = (xt_next, action)
-            self.replay_memory.add(state, action, reward, next_state)
+                self.replay_memory.add(experience=new_experience, reward=reward)
 
 
 def plot_losses(actor_losses, critic_losses):
