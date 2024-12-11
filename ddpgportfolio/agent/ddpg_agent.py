@@ -136,7 +136,7 @@ class DDPGAgent:
                 tau * main_param.data + (1.0 - tau) * target_param.data
             )
 
-    def train_actor(self, experience: Experience):
+    def train_actor(self, experience: Experience, is_weights: torch.tensor):
         self.actor_optimizer.zero_grad()
         logits = self.actor(experience.state)
         predicted_actions = torch.softmax(logits.view(-1), dim=-1)
@@ -149,14 +149,14 @@ class DDPGAgent:
         # compute the actor loss using deterministic policy gradient
         q_values = self.critic(state, predicted_actions).mean()
         actor_loss = -q_values.mean()
-
+        actor_loss = (actor_loss * is_weights).mean()
         # perform backprop
 
         actor_loss.backward()
         self.actor_optimizer.step()
         return predicted_actions[1:], actor_loss.item()
 
-    def train_critic(self, experience: Experience):
+    def train_critic(self, experience: Experience, is_weights):
         """Train the critic by minimizing the loss based on TD Error
 
         Parameters
@@ -173,7 +173,7 @@ class DDPGAgent:
         # critic needs to evaluate good an action is in a state
         # hence we need to add the cash weight back otherwise its biased
         xt, previous_noncash_actions = experience.state
-        reward = experience.reward
+        reward = torch.tensor(experience.reward, dtype=torch.float32)
         cash_weight_previous = 1 - previous_noncash_actions.sum()
 
         # previous action includes cash weight now
@@ -199,12 +199,13 @@ class DDPGAgent:
             next_q_values = self.target_critic(next_state, next_target_action)
 
             # calculate target q values using bellman equation
-            td_target = experience.reward + self.gamma * next_q_values
+            td_target = reward + self.gamma * next_q_values
 
         # compute the critic loss using MSE between predicted Q-values and target Q-values
         # Hence we are minimizing the TD Error
         td_error = td_target - predicted_q_values
         critic_loss = torch.mean(td_error**2)
+        critic_loss = critic_loss * is_weights
 
         critic_loss.backward()
         self.critic_optimizer.step()
@@ -259,11 +260,17 @@ class DDPGAgent:
             # batch_actor_loss = 0
             # batch_critic_loss = 0
 
-            experiences, weights, indices = self.replay_memory.sample(self.batch_size)
+            experiences, indices, is_weights = self.replay_memory.sample(
+                self.batch_size
+            )
             for experience in experiences:
-                # get the predicted action and update pvm
+                # get the td errors and update replay memory
+                td_errors, critic_loss = self.train_critic(experience)
+                self.replay_memory.update_priorities(indices, td_errors)
                 action, actor_loss = self.train_actor(experience)
-                self.pvm.update_memory_stack(action, experience.previous_index + 1)
+                self.pvm.update_memory_stack(
+                    action.detach(), experience.previous_index + 1
+                )
 
                 # compute relative price vector to calculate reward
                 yt = 1 / experience.state[0][0, :, -2]
@@ -281,7 +288,3 @@ class DDPGAgent:
                     state, action, reward, next_state, previous_index
                 )
                 self.replay_memory.add(experience=new_experience, reward=reward)
-
-                # get the td errors and update replay memory
-                td_errors, critic_loss = self.train_critic(experience)
-                self.replay_memory.update_priorities(indices, td_errors)

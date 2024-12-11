@@ -144,7 +144,7 @@ class PrioritizedReplayMemory:
         indices = np.random.choice(len(self), batch_size, p=prob)
 
         # Compute importance-sampling weights (using beta)
-        weights = (len(self.__buffer) * prob[indices]) ** (-self.beta)
+        weights = (len(self.__buffer) / prob[indices]) ** self.beta
         weights /= weights.max()  # Normalize to avoid large weights
 
         # Extract the actual experiences from the buffer using the indices
