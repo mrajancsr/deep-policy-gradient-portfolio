@@ -12,7 +12,6 @@ from ddpgportfolio.dataset import (
 )
 from ddpgportfolio.memory.memory import (
     Experience,
-    ExperienceReplayMemory,
     PortfolioVectorMemory,
     PrioritizedReplayMemory,
 )
@@ -137,11 +136,11 @@ class DDPGAgent:
                 tau * main_param.data + (1.0 - tau) * target_param.data
             )
 
-    def train_actor(self, state: Tuple[torch.tensor, torch.tensor]):
+    def train_actor(self, experience: Experience):
         self.actor_optimizer.zero_grad()
-        logits = self.actor(state)
+        logits = self.actor(experience.state)
         predicted_actions = torch.softmax(logits.view(-1), dim=-1)
-        xt, previous_noncash_actions = state
+        xt, previous_noncash_actions = experience.state
         cash_weight_previous = 1 - previous_noncash_actions.sum()
         previous_action = torch.cat(
             [cash_weight_previous.unsqueeze(0), previous_noncash_actions], dim=0
@@ -152,44 +151,61 @@ class DDPGAgent:
         actor_loss = -q_values.mean()
 
         # perform backprop
-        self.actor_optimizer.zero_grad()
+
         actor_loss.backward()
         self.actor_optimizer.step()
         return predicted_actions[1:], actor_loss.item()
 
-    def train_critic(self, state, action, reward, next_state):
-        """Train the critic network by minimizing the loss based on TD Error
+    def train_critic(self, experience: Experience):
+        """Train the critic by minimizing the loss based on TD Error
 
         Parameters
         ----------
-        state : _type_
+        experience : Experience
             _description_
-        action : _type_
-            _description_
-        reward : _type_
-            _description_
-        next_state : _type_
-            _description_
-        done : function
+
+        Returns
+        -------
+        _type_
             _description_
         """
         self.critic_optimizer.zero_grad()
-        # get predicted q values from current batch
-        predicted_q_values = self.critic(state, action)
+        # critic needs to evaluate good an action is in a state
+        # hence we need to add the cash weight back otherwise its biased
+        xt, previous_noncash_actions = experience.state
+        reward = experience.reward
+        cash_weight_previous = 1 - previous_noncash_actions.sum()
+
+        # previous action includes cash weight now
+        previous_action = torch.cat(
+            [cash_weight_previous.unsqueeze(0), previous_noncash_actions], dim=0
+        )
+        # construct st = (Xt, wt-1)
+        state = (xt, previous_action)
+
+        # we need to do the same for action wt at time t
+        noncash_actions = experience.action
+        cash_weight_action = 1 - noncash_actions.sum()
+        actions = torch.cat([cash_weight_action.unsqueeze(0), noncash_actions], dim=0)
+        predicted_q_values = self.critic(state, actions)
 
         with torch.no_grad():
-            # get the next q values using the target critic and next state (from target network)
-            next_action = self.target_actor(next_state)
-            next_q_values = self.target_critic(next_state, next_action)
+            # the target actor uses next state from replay buffer
+            logits = self.target_actor(experience.next_state)
+            next_target_action = torch.softmax(logits.view(-1), dim=-1)
+            # since previous action in next state is current action in current state
+            xt_next = experience.next_state[0]
+            next_state = (xt_next, actions)
+            next_q_values = self.target_critic(next_state, next_target_action)
 
             # calculate target q values using bellman equation
-            target_q_values = reward + self.gamma * next_q_values
+            td_target = experience.reward + self.gamma * next_q_values
 
         # compute the critic loss using MSE between predicted Q-values and target Q-values
         # Hence we are minimizing the TD Error
-        td_error = predicted_q_values - target_q_values
+        td_error = td_target - predicted_q_values
         critic_loss = torch.mean(td_error**2)
-        self.critic_optimizer.zero_grad()
+
         critic_loss.backward()
         self.critic_optimizer.step()
         return td_error, critic_loss.item()
@@ -205,13 +221,14 @@ class DDPGAgent:
             previous_action = self.pvm.get_memory_stack(prev_index)
             state = (xt, previous_action)
             # get current weight from actor network given s = (Xt, wt_prev)
-            action = self.select_action(state, exploration=True)
+            action = self.select_action(state, exploration=True).detach()
             # store the current action into pvm
-            self.pvm.update_memory_stack(action.detach(), prev_index + 1)
+            self.pvm.update_memory_stack(action, prev_index + 1)
             # get the relative price vector from price tensor to calculate reward
             yt = 1 / xt[0, :, -2]
-            reward = self.portfolio.get_reward(action, yt, previous_action) * 100
-            next_state = (kraken_ds[i], action)
+            reward = self.portfolio.get_reward(action, yt, previous_action)
+            xt_next, _ = kraken_ds[i]
+            next_state = (xt_next, action)
             experience = Experience(
                 state, action, reward.item(), next_state, prev_index
             )
@@ -245,38 +262,26 @@ class DDPGAgent:
             experiences, weights, indices = self.replay_memory.sample(self.batch_size)
             for experience in experiences:
                 # get the predicted action and update pvm
-                action, actor_loss = self.train_actor(experience.state)
+                action, actor_loss = self.train_actor(experience)
                 self.pvm.update_memory_stack(action, experience.previous_index + 1)
 
-                # get relative price vector to calculate reward
+                # compute relative price vector to calculate reward
                 yt = 1 / experience.state[0][0, :, -2]
-                reward = (
-                    self.portfolio.get_reward(action, yt, experience.state[1])
-                    * self.portfolio.get_initial_portfolio_value()
+                reward = self.portfolio.get_reward(
+                    action.detach(), yt, experience.state[1]
                 )
 
-                # create a new experience
+                # create a new experience and add it to replay memory
                 xt, previous_action = experience.state
                 state = (xt, previous_action)
                 xt_next = experience.next_state[0]
-                next_state = (xt_next, action)
-                new_experience = Experience(state, action, reward, next_state)
-
-                td_errors, critic_loss = self.train_critic(
-                    state, action, reward, next_state
+                next_state = (xt_next, action.detach())
+                previous_index = experience.previous_index
+                new_experience = Experience(
+                    state, action, reward, next_state, previous_index
                 )
-                self.replay_memory.update_priorities(indices, td_errors)
-
                 self.replay_memory.add(experience=new_experience, reward=reward)
 
-
-def plot_losses(actor_losses, critic_losses):
-    """Plot the actor and critic losses."""
-    plt.figure(figsize=(10, 5))
-    plt.plot(actor_losses, label="Actor Loss")
-    plt.plot(critic_losses, label="Critic Loss")
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.title("Actor and Critic Losses during Training")
-    plt.legend()
-    plt.show()
+                # get the td errors and update replay memory
+                td_errors, critic_loss = self.train_critic(experience)
+                self.replay_memory.update_priorities(indices, td_errors)
