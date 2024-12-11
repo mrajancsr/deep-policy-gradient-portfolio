@@ -45,8 +45,8 @@ class DDPGAgent:
     pvm: PortfolioVectorMemory = field(init=False)
     replay_memory: PrioritizedReplayMemory = field(init=False)
     ou_noise: OrnsteinUhlenbeckNoise = field(init=False)
-    gamma: float = 0.90
-    tau: float = 0.005
+    gamma: float = 0.9
+    tau: float = 0.001
 
     def __post_init__(self):
         # create dataset and dataloaders for proper iteration
@@ -67,12 +67,12 @@ class DDPGAgent:
         self.target_critic = self.clone_network(self.critic)
         self.actor_optimizer = torch.optim.Adam(
             self.actor.parameters(),
-            lr=self.learning_rate,
+            lr=5e-6,
             weight_decay=1e-5,
         )
         self.critic_optimizer = torch.optim.Adam(
             self.critic.parameters(),
-            lr=self.learning_rate,
+            lr=1e-4,
             weight_decay=1e-5,
         )
         self.actor.to(self.device)
@@ -154,6 +154,7 @@ class DDPGAgent:
         # perform backprop
 
         actor_loss.backward()
+        # torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
         self.actor_optimizer.step()
         return predicted_actions[1:], actor_loss.item()
 
@@ -209,6 +210,7 @@ class DDPGAgent:
         critic_loss = (critic_loss * is_weights).mean()
 
         critic_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=1.0)
         self.critic_optimizer.step()
         return td_error, critic_loss.item()
 
@@ -228,7 +230,7 @@ class DDPGAgent:
             self.pvm.update_memory_stack(action, prev_index + 1)
             # get the relative price vector from price tensor to calculate reward
             yt = 1 / xt[0, :, -2]
-            reward = self.portfolio.get_reward(action, yt, previous_action) * 1000
+            reward = self.portfolio.get_reward(action, yt, previous_action) * 200
             xt_next, _ = kraken_ds[i]
             next_state = (xt_next, action)
             experience = Experience(
@@ -253,54 +255,73 @@ class DDPGAgent:
         actor_scheduler = torch.optim.lr_scheduler.ExponentialLR(
             self.actor_optimizer, gamma=0.995
         )
-        for iteration in range(self.n_iter):
+        # Training loop
+        n_episodes = 20
+        n_iterations_per_episode = 20
+        batch_size = self.batch_size
 
-            # total_actor_loss = 0
-            # total_critic_loss = 0
-            # total_reward = 0
-            batch_actor_loss = 0
-            batch_critic_loss = 0
+        for episode in range(n_episodes):
+            # Initialize accumulators for the losses
+            episode_actor_loss = 0
+            episode_critic_loss = 0
+            total_episodic_reward = 0
 
-            experiences, indices, is_weights = self.replay_memory.sample(
-                self.batch_size
+            # Loop over iterations within the current episode
+            for iteration in range(n_iterations_per_episode):
+                # Sample a batch of experiences from the replay buffer
+                experiences, indices, is_weights = self.replay_memory.sample(batch_size)
+
+                # Initialize accumulators for batch losses
+                batch_actor_loss = 0
+                batch_critic_loss = 0
+                batch_episodic_reward = 0
+
+                # Iterate through each experience in the batch
+                for idx, experience in enumerate(experiences):
+                    # get the reward
+                    reward = experience.reward
+                    # Update critic (TD Error)
+                    td_error, critic_loss = self.train_critic(experience, is_weights)
+
+                    # Update priorities in the replay buffer (for prioritized experience replay)
+                    self.replay_memory.update_priorities(indices[idx], td_error.item())
+
+                    # Update actor (deterministic policy gradient)
+                    action, actor_loss = self.train_actor(experience, is_weights)
+                    self.pvm.update_memory_stack(
+                        action.detach(), experience.previous_index + 1
+                    )
+                    # Accumulate batch losses
+                    batch_actor_loss += actor_loss
+                    batch_critic_loss += critic_loss
+                    batch_episodic_reward += reward
+
+                # Accumulate the losses over the iterations for logging
+                episode_actor_loss += batch_actor_loss
+                episode_critic_loss += batch_critic_loss
+                total_episodic_reward += batch_episodic_reward
+
+                # Optionally update the learning rate scheduler (if you're using one)
+                critic_scheduler.step()
+                actor_scheduler.step()
+
+            # After finishing the iterations for the episode, log the average losses
+            avg_episode_actor_loss = episode_actor_loss / (
+                n_iterations_per_episode * batch_size
             )
-            for idx, experience in enumerate(experiences):
-                # get the td errors and update replay memory
-                dd[iteration].append(experience.previous_index)
-                td_error, critic_loss = self.train_critic(experience, is_weights)
-                self.replay_memory.update_priorities(indices[idx], td_error.item())
-                action, actor_loss = self.train_actor(experience, is_weights)
-                train_pvm.update_memory_stack(
-                    action.detach(), experience.previous_index + 1
-                )
+            avg_episode_critic_loss = episode_critic_loss / (
+                n_iterations_per_episode * batch_size
+            )
 
-                # compute relative price vector to calculate reward
-                yt = 1 / experience.state[0][0, :, -2]
-                reward = (
-                    self.portfolio.get_reward(action, yt, experience.state[1]) * 1000
-                )
-
-                # create a new experience and add it to replay memory
-                xt, previous_action = experience.state
-                state = (xt, previous_action)
-                xt_next = experience.next_state[0]
-                next_state = (xt_next, action.detach())
-                previous_index = experience.previous_index
-                new_experience = Experience(
-                    state, action.detach(), reward.item(), next_state, previous_index
-                )
-                self.replay_memory.add(experience=new_experience, reward=reward.item())
-                self.update_target_networks()
-
-                # calculate total loss for logging
-                batch_actor_loss += actor_loss
-                batch_critic_loss += critic_loss
-            avg_batch_actor_loss = batch_actor_loss / self.batch_size
-            avg_batch_critic_loss = batch_critic_loss / self.batch_size
             print(
-                f"Iteration {iteration + 1} - Actor Loss: {avg_batch_actor_loss:.4f}, Critic Loss: {avg_batch_critic_loss:.4f}"
+                f"Episode {episode + 1} - Actor Loss: {avg_episode_actor_loss:.4f}, Critic Loss: {avg_episode_critic_loss:.4f}, Total Reward: {total_episodic_reward:.4f}"
             )
 
-            critic_scheduler.step()
-            actor_scheduler.step()
-        print("Stop")
+            # Update target networks after each episode (optional but recommended)
+            self.update_target_networks()
+
+            # Optional: Evaluate agent performance periodically (e.g., every 50 episodes)
+            if (episode + 1) % 50 == 0:
+                self.evaluate_agent()
+
+        print("Training complete!")
