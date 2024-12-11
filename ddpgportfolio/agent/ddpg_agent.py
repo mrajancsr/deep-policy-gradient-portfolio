@@ -1,3 +1,4 @@
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
@@ -29,7 +30,7 @@ class DDPGAgent:
     batch_size: int
     window_size: int
     step_size: int
-    n_episodes: int
+    n_iter: int
     learning_rate: Optional[float] = 3e-5
     betas: Optional[Tuple[float, float]] = (0.0, 0.9)
     device: Optional[str] = "mps"
@@ -147,7 +148,7 @@ class DDPGAgent:
         )
         state = (xt, previous_action)
         # compute the actor loss using deterministic policy gradient
-        q_values = self.critic(state, predicted_actions).mean()
+        q_values = self.critic(state, predicted_actions)
         actor_loss = -q_values.mean()
         actor_loss = (actor_loss * is_weights).mean()
         # perform backprop
@@ -227,7 +228,7 @@ class DDPGAgent:
             self.pvm.update_memory_stack(action, prev_index + 1)
             # get the relative price vector from price tensor to calculate reward
             yt = 1 / xt[0, :, -2]
-            reward = self.portfolio.get_reward(action, yt, previous_action)
+            reward = self.portfolio.get_reward(action, yt, previous_action) * 1000
             xt_next, _ = kraken_ds[i]
             next_state = (xt_next, action)
             experience = Experience(
@@ -242,40 +243,41 @@ class DDPGAgent:
     def train(self):
         if len(self.replay_memory) == 0:
             raise Exception("replay memory is empty.  Please pre-train agent")
-
+        dd = defaultdict(list)
+        train_pvm = PortfolioVectorMemory(self.portfolio.n_samples, 11)
         print("Training Started for DDPG Agent")
         # scheduler to perform learning rate decay
         critic_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            self.critic_optimizer, gamma=0.95
+            self.critic_optimizer, gamma=0.995
         )
         actor_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            self.actor_optimizer, gamma=0.95
+            self.actor_optimizer, gamma=0.995
         )
-        for episode in range(self.n_episodes):
+        for iteration in range(self.n_iter):
 
             # total_actor_loss = 0
             # total_critic_loss = 0
             # total_reward = 0
-            # total_batches = 0
-            # batch_actor_loss = 0
-            # batch_critic_loss = 0
+            batch_actor_loss = 0
+            batch_critic_loss = 0
 
             experiences, indices, is_weights = self.replay_memory.sample(
                 self.batch_size
             )
             for idx, experience in enumerate(experiences):
                 # get the td errors and update replay memory
+                dd[iteration].append(experience.previous_index)
                 td_error, critic_loss = self.train_critic(experience, is_weights)
-                self.replay_memory.update_priorities(indices[idx], td_error)
+                self.replay_memory.update_priorities(indices[idx], td_error.item())
                 action, actor_loss = self.train_actor(experience, is_weights)
-                self.pvm.update_memory_stack(
+                train_pvm.update_memory_stack(
                     action.detach(), experience.previous_index + 1
                 )
 
                 # compute relative price vector to calculate reward
                 yt = 1 / experience.state[0][0, :, -2]
-                reward = self.portfolio.get_reward(
-                    action.detach(), yt, experience.state[1]
+                reward = (
+                    self.portfolio.get_reward(action, yt, experience.state[1]) * 1000
                 )
 
                 # create a new experience and add it to replay memory
@@ -285,6 +287,20 @@ class DDPGAgent:
                 next_state = (xt_next, action.detach())
                 previous_index = experience.previous_index
                 new_experience = Experience(
-                    state, action, reward, next_state, previous_index
+                    state, action.detach(), reward.item(), next_state, previous_index
                 )
-                self.replay_memory.add(experience=new_experience, reward=reward)
+                self.replay_memory.add(experience=new_experience, reward=reward.item())
+                self.update_target_networks()
+
+                # calculate total loss for logging
+                batch_actor_loss += actor_loss
+                batch_critic_loss += critic_loss
+            avg_batch_actor_loss = batch_actor_loss / self.batch_size
+            avg_batch_critic_loss = batch_critic_loss / self.batch_size
+            print(
+                f"Iteration {iteration + 1} - Actor Loss: {avg_batch_actor_loss:.4f}, Critic Loss: {avg_batch_critic_loss:.4f}"
+            )
+
+            critic_scheduler.step()
+            actor_scheduler.step()
+        print("Stop")

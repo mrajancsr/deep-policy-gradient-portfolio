@@ -90,18 +90,21 @@ class PrioritizedReplayMemory:
     beta_decay_rate: Optional[float] = 0.01
     alpha_decay_rate: Optional[float] = 0.001
     device: Optional[str] = "mps"
-    __buffer: List[Experience] = field(init=False, default_factory=lambda: [])
+    buffer: List[Experience] = field(init=False, default_factory=lambda: [])
     pos: int = field(init=False, default=0)
-    __priorities: List[float] = field(init=False, default_factory=lambda: [])
+    priorities: List[float] = field(init=False, default_factory=lambda: [])
 
     def __repr__(self):
-        return f"Total Experiences: {len(self.__buffer)}"
+        return f"Total Experiences: {len(self.buffer)}"
 
     def __len__(self):
-        return len(self.__buffer)
+        return len(self.buffer)
 
-    def peek(self):
-        return self.__buffer[-1]
+    def peek_buffer(self):
+        return self.buffer[-1]
+
+    def peek_priorities(self):
+        return self.priorities[-1]
 
     def add(self, experience: Experience, reward: float):
         """_summary_
@@ -115,14 +118,14 @@ class PrioritizedReplayMemory:
         """
         priority = abs(reward) + self.epsilon
 
-        if len(self.__buffer) < self.capacity:
+        if len(self.buffer) < self.capacity:
             # add experiencs and their priority
-            self.__buffer.append(experience)
-            self.__priorities.append(priority)
+            self.buffer.append(experience)
+            self.priorities.append(priority)
         else:
             # overwrite experience at position pos
-            self.__buffer[self.pos] = experience
-            self.__priorities[self.pos] = priority
+            self.buffer[self.pos] = experience
+            self.priorities[self.pos] = priority
 
         self.pos = (self.pos + 1) % self.capacity
 
@@ -137,18 +140,18 @@ class PrioritizedReplayMemory:
         self.beta = min(1.0, beta + self.beta_decay_rate)  # Gradually increase beta
 
         # Normalize the priorities and calculate the probabilities
-        priorities = np.array(self.__priorities) ** self.alpha
+        priorities = np.array(self.priorities) ** self.alpha
         prob = priorities / priorities.sum()
 
         # Sample batch of experiences based on the probabilities
         indices = np.random.choice(len(self), batch_size, p=prob)
 
         # Compute importance-sampling weights (using beta)
-        weights = (len(self.__buffer) / prob[indices]) ** self.beta
+        weights = (len(self.buffer) / prob[indices]) ** self.beta
         weights /= weights.max()  # Normalize to avoid large weights
 
         # Extract the actual experiences from the buffer using the indices
-        experiences = [self.__buffer[idx] for idx in indices]
+        experiences = [self.buffer[idx] for idx in indices]
 
         weights = torch.tensor(
             weights, dtype=torch.float32
@@ -157,4 +160,4 @@ class PrioritizedReplayMemory:
         return experiences, indices, weights
 
     def update_priorities(self, idx, td_error):
-        self.__priorities[idx] = abs(td_error) + self.epsilon
+        self.priorities[idx] = abs(td_error) + self.epsilon
