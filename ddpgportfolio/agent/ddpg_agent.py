@@ -205,7 +205,7 @@ class DDPGAgent:
         # Hence we are minimizing the TD Error
         td_error = td_target - predicted_q_values
         critic_loss = torch.mean(td_error**2)
-        critic_loss = critic_loss * is_weights
+        critic_loss = (critic_loss * is_weights).mean()
 
         critic_loss.backward()
         self.critic_optimizer.step()
@@ -263,11 +263,11 @@ class DDPGAgent:
             experiences, indices, is_weights = self.replay_memory.sample(
                 self.batch_size
             )
-            for experience in experiences:
+            for idx, experience in enumerate(experiences):
                 # get the td errors and update replay memory
-                td_errors, critic_loss = self.train_critic(experience)
-                self.replay_memory.update_priorities(indices, td_errors)
-                action, actor_loss = self.train_actor(experience)
+                td_error, critic_loss = self.train_critic(experience, is_weights)
+                self.replay_memory.update_priorities(indices[idx], td_error)
+                action, actor_loss = self.train_actor(experience, is_weights)
                 self.pvm.update_memory_stack(
                     action.detach(), experience.previous_index + 1
                 )

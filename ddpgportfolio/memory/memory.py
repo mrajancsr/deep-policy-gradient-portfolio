@@ -156,8 +156,5 @@ class PrioritizedReplayMemory:
 
         return experiences, indices, weights
 
-    def update_priorities(self, indices, td_errors):
-        for idx, td_error in zip(indices, td_errors):
-            self.__priorities[idx] = (
-                abs(td_error) + self.epsilon
-            )  # Update priority based on TD-error
+    def update_priorities(self, idx, td_error):
+        self.__priorities[idx] = abs(td_error) + self.epsilon
