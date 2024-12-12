@@ -1,8 +1,5 @@
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
-
-from ddpgportfolio.memory.memory import PortfolioVectorMemory
 
 
 class OrnsteinUhlenbeckNoise:
@@ -22,26 +19,6 @@ class OrnsteinUhlenbeckNoise:
         dx = self.theta * (self.mu - x) + self.sigma * np.random.randn(self.size)
         self.state = x + dx
         return torch.tensor(self.state, dtype=torch.float32)
-
-
-def plot_equity_curve(pvm: PortfolioVectorMemory):
-    # Initialize portfolio value
-    initial_portfolio_value = 10000
-    equity_curve = []
-
-    # Assume pvm stores actions (weights) over time
-    for timestep in range(48, len(pvm.memory)):  # Loop over each timestep
-        noncash_action = pvm.get_memory_stack(
-            timestep
-        )  # Get action (weights) at this timestep
-        cash = 1 - noncash_action.sum()
-        action = torch.cat([cash.unsqueeze(0), noncash_action], dim=0)
-        portfolio_value = (
-            (action * initial_portfolio_value).sum().item()
-        )  # Portfolio value
-        equity_curve.append(portfolio_value)  # Add to equity curve list
-
-    return equity_curve
 
 
 class RewardNormalizer:

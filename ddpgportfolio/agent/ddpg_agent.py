@@ -262,7 +262,7 @@ class DDPGAgent:
 
             # get the relative price vector from price tensor to calculate reward
             yt = 1 / xt[0, :, -2]
-            reward = self.portfolio.get_reward(action, yt, previous_action, batch_size)
+            reward = self.portfolio.get_reward(action, yt, previous_action)
             reward_normalizer.update(reward.item())
             normalized_reward = reward_normalizer.normalize(reward.item())
             xt_next, _ = kraken_ds[i]
@@ -276,11 +276,10 @@ class DDPGAgent:
         # we subtract one since each experience consists of current state and next state
         assert len(self.replay_memory) == n_samples + 48
 
-    def train(self):
+    def train(self, n_episodes: int = 50, n_iterations_per_episode: int = 20):
         if len(self.replay_memory) == 0:
             raise Exception("replay memory is empty.  Please pre-train agent")
-        dd = defaultdict(list)
-        train_pvm = PortfolioVectorMemory(self.portfolio.n_samples, 11)
+
         print("Training Started for DDPG Agent")
         # scheduler to perform learning rate decay
         critic_scheduler = torch.optim.lr_scheduler.StepLR(
@@ -290,8 +289,6 @@ class DDPGAgent:
             self.actor_optimizer, step_size=100, gamma=0.9
         )
         # Training loop
-        n_episodes = 20
-        n_iterations_per_episode = 20
         batch_size = self.batch_size
 
         for episode in range(n_episodes):
@@ -303,7 +300,9 @@ class DDPGAgent:
             # Loop over iterations within the current episode
             for iteration in range(n_iterations_per_episode):
                 # Sample a batch of experiences from the replay buffer
-                experiences, indices, is_weights = self.replay_memory.sample(50)
+                experiences, indices, is_weights = self.replay_memory.sample(
+                    batch_size=batch_size
+                )
 
                 # Initialize accumulators for batch losses
                 batch_actor_loss = 0

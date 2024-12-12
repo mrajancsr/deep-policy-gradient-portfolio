@@ -173,7 +173,6 @@ class Portfolio:
         wt: torch.tensor,
         yt: torch.tensor,
         wt_prev: torch.tensor,
-        batch_size: int,
         risk_free_rate: float = 0.0425,
     ):
         """returns the immediate reward to the agent given by 11 and mentioned on pg 11
@@ -218,7 +217,7 @@ class Portfolio:
             reward - 0.05 * weight_change_penalty - 0.1 * transaction_penalty
         )  # tune the penalties
 
-        return reward  # Normalize by batch size for stability
+        return shaped_reward
 
 
 if __name__ == "__main__":
