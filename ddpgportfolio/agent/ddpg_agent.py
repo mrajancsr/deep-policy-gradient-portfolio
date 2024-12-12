@@ -1,8 +1,6 @@
-from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -181,7 +179,7 @@ class DDPGAgent:
 
         actor_loss.backward()
         # torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
-        self.actor_optimizer.step()
+
         return predicted_actions[1:], actor_loss.item()
 
     def train_critic(self, experience: Experience, is_weights):
@@ -237,7 +235,7 @@ class DDPGAgent:
 
         critic_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=1.0)
-        self.critic_optimizer.step()
+
         return td_error, critic_loss.item()
 
     def pre_train(self):
@@ -248,7 +246,7 @@ class DDPGAgent:
         reward_normalizer = RewardNormalizer()
 
         n_samples = len(kraken_ds)
-        batch_size = self.batch_size
+
         for i in range(1, n_samples + 49):
             xt, prev_index = kraken_ds[i - 1]
             previous_action = self.pvm.get_memory_stack(prev_index)
@@ -272,7 +270,9 @@ class DDPGAgent:
             )
             self.replay_memory.add(experience=experience, reward=normalized_reward)
         print("pretraining done")
+
         print(f"buffer size: {len(self.replay_memory)}")
+
         # we subtract one since each experience consists of current state and next state
         assert len(self.replay_memory) == n_samples + 48
 
@@ -329,12 +329,16 @@ class DDPGAgent:
                     batch_critic_loss += critic_loss
                     batch_episodic_reward += reward
 
+                # accumulate gradients
+                self.critic_optimizer.step()
+                self.actor_optimizer.step()
+
                 # Accumulate the losses over the iterations for logging
                 episode_actor_loss += batch_actor_loss
                 episode_critic_loss += batch_critic_loss
                 total_episodic_reward += batch_episodic_reward
 
-                # Optionally update the learning rate scheduler (if you're using one)
+                # Update the learning rate scheduler
                 critic_scheduler.step()
                 actor_scheduler.step()
 
