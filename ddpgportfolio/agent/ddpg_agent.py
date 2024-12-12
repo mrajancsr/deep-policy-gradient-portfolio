@@ -353,8 +353,4 @@ class DDPGAgent:
             # Update target networks after each episode (optional but recommended)
             self.update_target_networks()
 
-            # Optional: Evaluate agent performance periodically (e.g., every 50 episodes)
-            # if (episode + 1) % 50 == 0:
-            # self.evaluate_agent()
-
         print("Training complete!")
