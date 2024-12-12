@@ -162,6 +162,20 @@ class DDPGAgent:
             )
 
     def train_actor(self, experience: Experience, is_weights: torch.tensor):
+        """trains the actor network by maximizing the Q Value from Critic
+
+        Parameters
+        ----------
+        experience : Experience
+            _description_
+        is_weights : torch.tensor
+            _description_
+
+        Returns
+        -------
+        _type_
+            _description_
+        """
         self.actor_optimizer.zero_grad()
         logits = self.actor(experience.state)
         predicted_actions = torch.softmax(logits.view(-1), dim=-1)
@@ -171,7 +185,9 @@ class DDPGAgent:
             [cash_weight_previous.unsqueeze(0), previous_noncash_actions], dim=0
         )
         state = (xt, previous_action)
-        # compute the actor loss using deterministic policy gradient
+
+        # actor has to choose action that maximizes the q value
+        # hence we compute the q value and maximize this value
         q_values = self.critic(state, predicted_actions)
         actor_loss = -q_values.mean()
         actor_loss = (actor_loss * is_weights).mean()
@@ -183,12 +199,15 @@ class DDPGAgent:
         return predicted_actions[1:], actor_loss.item()
 
     def train_critic(self, experience: Experience, is_weights):
-        """Train the critic by minimizing the loss based on TD Error
+        """Train the critic by minimizing loss based on TD Error
 
         Parameters
         ----------
         experience : Experience
-            _description_
+            an object consisting of (st, at, rt, st+1)
+            st = (Xt, at-1)
+        is_weights : bool
+            importance sampling weights
 
         Returns
         -------
@@ -277,6 +296,20 @@ class DDPGAgent:
         assert len(self.replay_memory) == n_samples + 48
 
     def train(self, n_episodes: int = 50, n_iterations_per_episode: int = 20):
+        """Train the agent by training the actor and critic networks
+
+        Parameters
+        ----------
+        n_episodes : int, optional
+            _description_, by default 50
+        n_iterations_per_episode : int, optional
+            _description_, by default 20
+
+        Raises
+        ------
+        Exception
+            _description_
+        """
         if len(self.replay_memory) == 0:
             raise Exception("replay memory is empty.  Please pre-train agent")
 
