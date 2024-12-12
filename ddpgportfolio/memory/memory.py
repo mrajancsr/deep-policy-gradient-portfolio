@@ -89,6 +89,7 @@ class PrioritizedReplayMemory:
     epsilon: Optional[float] = 1e-5
     beta_decay_rate: Optional[float] = 0.01
     alpha_decay_rate: Optional[float] = 0.001
+    min_priority: float = 0.1
     device: Optional[str] = "mps"
     buffer: List[Experience] = field(init=False, default_factory=lambda: [])
     pos: int = field(init=False, default=0)
@@ -127,6 +128,7 @@ class PrioritizedReplayMemory:
             self.buffer[self.pos] = experience
             self.priorities[self.pos] = priority
 
+        self.priorities[self.pos] = max(priority, self.min_priority)
         self.pos = (self.pos + 1) % self.capacity
 
     def sample(
@@ -160,4 +162,5 @@ class PrioritizedReplayMemory:
         return experiences, indices, weights
 
     def update_priorities(self, idx, td_error):
-        self.priorities[idx] = abs(td_error) + self.epsilon
+        priority = abs(td_error) + self.epsilon
+        self.priorities[idx] = max(priority, self.min_priority)

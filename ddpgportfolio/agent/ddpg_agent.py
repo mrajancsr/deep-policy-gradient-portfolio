@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -17,7 +18,7 @@ from ddpgportfolio.memory.memory import (
     PrioritizedReplayMemory,
 )
 from ddpgportfolio.portfolio.portfolio import Portfolio
-from utilities.noise import OrnsteinUhlenbeckNoise
+from utilities.pg_utils import RewardNormalizer
 
 torch.set_default_device("mps")
 
@@ -44,9 +45,15 @@ class DDPGAgent:
     dataloader: DataLoader = field(init=False)
     pvm: PortfolioVectorMemory = field(init=False)
     replay_memory: PrioritizedReplayMemory = field(init=False)
-    ou_noise: OrnsteinUhlenbeckNoise = field(init=False)
+
     gamma: float = 0.9
     tau: float = 0.001
+    epsilon: float = 0.0
+    epsilon_max: float = 1.0
+    epsilon_min: float = 0.01
+    epsilon_decay_rate: float = 1e-4
+    episode_count: int = 0
+    warmup_steps: int = 100
 
     def __post_init__(self):
         # create dataset and dataloaders for proper iteration
@@ -67,12 +74,12 @@ class DDPGAgent:
         self.target_critic = self.clone_network(self.critic)
         self.actor_optimizer = torch.optim.Adam(
             self.actor.parameters(),
-            lr=5e-6,
+            lr=1e-5,
             weight_decay=1e-5,
         )
         self.critic_optimizer = torch.optim.Adam(
             self.critic.parameters(),
-            lr=1e-4,
+            lr=1e-5,
             weight_decay=1e-5,
         )
         self.actor.to(self.device)
@@ -92,25 +99,44 @@ class DDPGAgent:
             capacity=100000,
         )
         self.update_target_networks()
-        self.ou_noise = OrnsteinUhlenbeckNoise(1)
 
     def clone_network(self, network):
         cloned_network = type(network)()
         cloned_network.load_state_dict(network.state_dict())
         return cloned_network
 
+    def get_random_action(self, m):
+        random_vec = np.random.rand(m)
+        return torch.tensor(random_vec / np.sum(random_vec), dtype=torch.float32)
+
     def select_action(self, state, exploration: bool = False):
         """Select action using the actor's policy (deterministic action)"""
         self.actor.eval()  # Ensure the actor is in evaluation mode
+        m_assets = self.portfolio.m_assets
         with torch.no_grad():
             action_logits = self.actor(state)
-        if exploration:
-            noise = self.ou_noise.sample()
-            action = torch.softmax(action_logits.view(-1) + noise, dim=0)
+        if exploration and np.random.rand() < self.epsilon:
+            action = self.get_random_action(m_assets)
         else:
-            action = torch.softmax(action_logits, dim=0)
+            action = torch.softmax(action_logits.view(-1), dim=0)
+
+        # update epsilon
+        self.update_epsilon()
         # return all non-cash weights
         return action[1:]
+
+    def update_epsilon(self):
+        if self.episode_count < self.warmup_steps:
+            self.epsilon = (self.epsilon_max / self.warmup_steps) * self.episode_count
+        else:
+            self.epsilon = max(
+                self.epsilon_min,
+                self.epsilon
+                * np.exp(
+                    -self.epsilon_decay_rate * (self.episode_count - self.warmup_steps)
+                ),
+            )
+        self.episode_count += 1
 
     def update_target_networks(self):
         self.soft_update(self.target_actor, self.actor, self.tau)
@@ -219,28 +245,36 @@ class DDPGAgent:
         print("pre-training ddpg agent started...")
         print("ReplayMemoryBuffer populating with experience...")
         kraken_ds = KrakenDataSet(self.portfolio, self.window_size, self.step_size)
+        reward_normalizer = RewardNormalizer()
+
         n_samples = len(kraken_ds)
-        for i in range(1, n_samples):
+        batch_size = self.batch_size
+        for i in range(1, n_samples + 49):
             xt, prev_index = kraken_ds[i - 1]
             previous_action = self.pvm.get_memory_stack(prev_index)
             state = (xt, previous_action)
+
             # get current weight from actor network given s = (Xt, wt_prev)
             action = self.select_action(state, exploration=True).detach()
+
             # store the current action into pvm
             self.pvm.update_memory_stack(action, prev_index + 1)
+
             # get the relative price vector from price tensor to calculate reward
             yt = 1 / xt[0, :, -2]
-            reward = self.portfolio.get_reward(action, yt, previous_action) * 200
+            reward = self.portfolio.get_reward(action, yt, previous_action, batch_size)
+            reward_normalizer.update(reward.item())
+            normalized_reward = reward_normalizer.normalize(reward.item())
             xt_next, _ = kraken_ds[i]
             next_state = (xt_next, action)
             experience = Experience(
-                state, action, reward.item(), next_state, prev_index
+                state, action, normalized_reward, next_state, prev_index
             )
-            self.replay_memory.add(experience=experience, reward=reward.item())
+            self.replay_memory.add(experience=experience, reward=normalized_reward)
         print("pretraining done")
         print(f"buffer size: {len(self.replay_memory)}")
         # we subtract one since each experience consists of current state and next state
-        assert len(self.replay_memory) == n_samples - 1
+        assert len(self.replay_memory) == n_samples + 48
 
     def train(self):
         if len(self.replay_memory) == 0:
@@ -249,11 +283,11 @@ class DDPGAgent:
         train_pvm = PortfolioVectorMemory(self.portfolio.n_samples, 11)
         print("Training Started for DDPG Agent")
         # scheduler to perform learning rate decay
-        critic_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            self.critic_optimizer, gamma=0.995
+        critic_scheduler = torch.optim.lr_scheduler.StepLR(
+            self.critic_optimizer, step_size=100, gamma=0.9
         )
-        actor_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            self.actor_optimizer, gamma=0.995
+        actor_scheduler = torch.optim.lr_scheduler.StepLR(
+            self.actor_optimizer, step_size=100, gamma=0.9
         )
         # Training loop
         n_episodes = 20
@@ -269,7 +303,7 @@ class DDPGAgent:
             # Loop over iterations within the current episode
             for iteration in range(n_iterations_per_episode):
                 # Sample a batch of experiences from the replay buffer
-                experiences, indices, is_weights = self.replay_memory.sample(batch_size)
+                experiences, indices, is_weights = self.replay_memory.sample(50)
 
                 # Initialize accumulators for batch losses
                 batch_actor_loss = 0
@@ -321,7 +355,7 @@ class DDPGAgent:
             self.update_target_networks()
 
             # Optional: Evaluate agent performance periodically (e.g., every 50 episodes)
-            if (episode + 1) % 50 == 0:
-                self.evaluate_agent()
+            # if (episode + 1) % 50 == 0:
+            # self.evaluate_agent()
 
         print("Training complete!")

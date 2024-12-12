@@ -42,7 +42,7 @@ class Actor(nn.Module):
         self.conv_layer_with_weights = nn.Sequential(
             nn.Conv2d(21, 1, kernel_size=(1, 1), stride=1)
         )
-        self.cash_bias = nn.Parameter(torch.full((1, 1, 1), 0.7))
+        self.cash_bias = nn.Parameter(torch.full((1, 1, 1), 0.3))
         self.softmax = nn.Softmax(dim=1)
         self.apply(weights_init)
 
