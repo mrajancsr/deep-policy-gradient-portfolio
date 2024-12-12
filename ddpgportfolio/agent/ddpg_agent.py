@@ -354,7 +354,7 @@ class DDPGAgent:
                 f"Episode {episode + 1} - Actor Loss: {avg_episode_actor_loss:.4f}, Critic Loss: {avg_episode_critic_loss:.4f}, Total Reward: {total_episodic_reward:.4f}"
             )
 
-            # Update target networks after each episode (optional but recommended)
+            # Update target networks after each episode
             self.update_target_networks()
 
         print("Training complete!")
