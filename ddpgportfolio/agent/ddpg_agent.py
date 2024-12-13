@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -16,7 +17,7 @@ from ddpgportfolio.memory.memory import (
     PrioritizedReplayMemory,
 )
 from ddpgportfolio.portfolio.portfolio import Portfolio
-from utilities.pg_utils import RewardNormalizer
+from utilities.pg_utils import RewardNormalizer, plot_performance
 
 torch.set_default_device("mps")
 
@@ -116,7 +117,7 @@ class DDPGAgent:
         if exploration and np.random.rand() < self.epsilon:
             action = self.get_random_action(m_assets)
         else:
-            action = torch.softmax(action_logits.view(-1), dim=0)
+            action = torch.softmax(action_logits.view(-1), dim=-1)
 
         # update epsilon
         self.update_epsilon()
@@ -178,11 +179,11 @@ class DDPGAgent:
         """
         self.actor_optimizer.zero_grad()
         logits = self.actor(experience.state)
-        predicted_actions = torch.softmax(logits.view(-1), dim=-1)
+        predicted_actions = torch.softmax(logits, dim=1)
         xt, previous_noncash_actions = experience.state
-        cash_weight_previous = 1 - previous_noncash_actions.sum()
+        cash_weight_previous = 1 - previous_noncash_actions.sum(dim=1)
         previous_action = torch.cat(
-            [cash_weight_previous.unsqueeze(0), previous_noncash_actions], dim=0
+            [cash_weight_previous.unsqueeze(1), previous_noncash_actions], dim=1
         )
         state = (xt, previous_action)
 
@@ -195,8 +196,8 @@ class DDPGAgent:
 
         actor_loss.backward()
         # torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
-
-        return predicted_actions[1:], actor_loss.item()
+        self.actor_optimizer.step()
+        return predicted_actions[:, 1:], actor_loss.item()
 
     def train_critic(self, experience: Experience, is_weights):
         """Train the critic by minimizing loss based on TD Error
@@ -206,6 +207,7 @@ class DDPGAgent:
         experience : Experience
             an object consisting of (st, at, rt, st+1)
             st = (Xt, at-1)
+            size of each experience is given by batch_size
         is_weights : bool
             importance sampling weights
 
@@ -218,26 +220,26 @@ class DDPGAgent:
         # critic needs to evaluate good an action is in a state
         # hence we need to add the cash weight back otherwise its biased
         xt, previous_noncash_actions = experience.state
-        reward = torch.tensor(experience.reward, dtype=torch.float32)
-        cash_weight_previous = 1 - previous_noncash_actions.sum()
+        reward = experience.reward
+        cash_weight_previous = 1 - previous_noncash_actions.sum(dim=1)
 
         # previous action includes cash weight now
         previous_action = torch.cat(
-            [cash_weight_previous.unsqueeze(0), previous_noncash_actions], dim=0
+            [cash_weight_previous.unsqueeze(1), previous_noncash_actions], dim=1
         )
         # construct st = (Xt, wt-1)
         state = (xt, previous_action)
 
         # we need to do the same for action wt at time t
         noncash_actions = experience.action
-        cash_weight_action = 1 - noncash_actions.sum()
-        actions = torch.cat([cash_weight_action.unsqueeze(0), noncash_actions], dim=0)
+        cash_weight_action = 1 - noncash_actions.sum(dim=1)
+        actions = torch.cat([cash_weight_action.unsqueeze(1), noncash_actions], dim=1)
         predicted_q_values = self.critic(state, actions)
 
         with torch.no_grad():
             # the target actor uses next state from replay buffer
-            logits = self.target_actor(experience.next_state)
-            next_target_action = torch.softmax(logits.view(-1), dim=-1)
+            action_logits = self.target_actor(experience.next_state)
+            next_target_action = torch.softmax(action_logits, dim=1)
             # since previous action in next state is current action in current state
             xt_next = experience.next_state[0]
             next_state = (xt_next, actions)
@@ -254,7 +256,7 @@ class DDPGAgent:
 
         critic_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=1.0)
-
+        self.critic_optimizer.step()
         return td_error, critic_loss.item()
 
     def pre_train(self):
@@ -324,6 +326,10 @@ class DDPGAgent:
         # Training loop
         batch_size = self.batch_size
 
+        critic_losses = []
+        actor_losses = []
+        rewards = []
+
         for episode in range(n_episodes):
             # Initialize accumulators for the losses
             episode_actor_loss = 0
@@ -337,51 +343,35 @@ class DDPGAgent:
                     batch_size=batch_size
                 )
 
-                # Initialize accumulators for batch losses
-                batch_actor_loss = 0
-                batch_critic_loss = 0
-                batch_episodic_reward = 0
+                # get the reward
+                reward = experiences.reward
+                # Update critic (TD Error)
+                td_error, critic_loss = self.train_critic(experiences, is_weights)
 
-                # Iterate through each experience in the batch
-                for idx, experience in enumerate(experiences):
-                    # get the reward
-                    reward = experience.reward
-                    # Update critic (TD Error)
-                    td_error, critic_loss = self.train_critic(experience, is_weights)
+                # Update priorities in the replay buffer (for prioritized experience replay)
+                self.replay_memory.update_priorities(indices, td_error)
 
-                    # Update priorities in the replay buffer (for prioritized experience replay)
-                    self.replay_memory.update_priorities(indices[idx], td_error.item())
-
-                    # Update actor (deterministic policy gradient)
-                    action, actor_loss = self.train_actor(experience, is_weights)
-                    self.pvm.update_memory_stack(
-                        action.detach(), experience.previous_index + 1
-                    )
-                    # Accumulate batch losses
-                    batch_actor_loss += actor_loss
-                    batch_critic_loss += critic_loss
-                    batch_episodic_reward += reward
-
-                # accumulate gradients
-                self.critic_optimizer.step()
-                self.actor_optimizer.step()
+                # Update actor (deterministic policy gradient)
+                action, actor_loss = self.train_actor(experiences, is_weights)
+                self.pvm.update_memory_stack(
+                    action.detach(), experiences.previous_index + 1
+                )
 
                 # Accumulate the losses over the iterations for logging
-                episode_actor_loss += batch_actor_loss
-                episode_critic_loss += batch_critic_loss
-                total_episodic_reward += batch_episodic_reward
+                episode_actor_loss += actor_loss
+                episode_critic_loss += critic_loss
+                total_episodic_reward += reward.sum().item()
 
                 # Update the learning rate scheduler
                 critic_scheduler.step()
                 actor_scheduler.step()
 
             # After finishing the iterations for the episode, log the average losses
-            avg_episode_actor_loss = episode_actor_loss / (
-                n_iterations_per_episode * batch_size
-            )
-            avg_episode_critic_loss = episode_critic_loss / (
-                n_iterations_per_episode * batch_size
-            )
+            avg_episode_actor_loss = episode_actor_loss / (n_iterations_per_episode)
+            avg_episode_critic_loss = episode_critic_loss / (n_iterations_per_episode)
+            actor_losses.append(avg_episode_actor_loss)
+            critic_losses.append(avg_episode_critic_loss)
+            rewards.append(total_episodic_reward)
 
             print(
                 f"Episode {episode + 1} - Actor Loss: {avg_episode_actor_loss:.4f}, Critic Loss: {avg_episode_critic_loss:.4f}, Total Reward: {total_episodic_reward:.4f}"
@@ -391,3 +381,5 @@ class DDPGAgent:
             self.update_target_networks()
 
         print("Training complete!")
+        # performance plots
+        plot_performance(actor_losses, critic_losses, rewards)

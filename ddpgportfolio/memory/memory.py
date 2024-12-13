@@ -72,9 +72,7 @@ class Experience:
     previous_index: torch.tensor
 
     def __repr__(self):
-        return f"Close Price: {self.state[0][0, :2, -2]}\
-            \naction {self.state[1][:2]}\
-            \nreward {self.reward:.4f}"
+        return "Experience"
 
 
 @dataclass
@@ -155,12 +153,37 @@ class PrioritizedReplayMemory:
         # Extract the actual experiences from the buffer using the indices
         experiences = [self.buffer[idx] for idx in indices]
 
+        xt, prev_action, action, reward, xt_next, prev_index = zip(
+            *[
+                (
+                    *(exp.state[0], exp.state[1]),
+                    exp.action,
+                    exp.reward,
+                    exp.next_state[0],
+                    exp.previous_index,
+                )
+                for exp in experiences
+            ]
+        )
+
+        xt = torch.stack(xt)
+        prev_action = torch.stack(prev_action)
+        action = torch.stack(action)
+        reward = torch.tensor(reward, dtype=torch.float32)
+        xt_next = torch.stack(xt_next)
+        prev_index = torch.tensor(prev_index)
+
+        experience = Experience(
+            (xt, prev_action), action, reward, (xt_next, action), prev_index
+        )
+
         weights = torch.tensor(
             weights, dtype=torch.float32
         )  # Convert weights to torch tensor
 
-        return experiences, indices, weights
+        return experience, indices, weights
 
-    def update_priorities(self, idx, td_error):
-        priority = abs(td_error) + self.epsilon
-        self.priorities[idx] = max(priority, self.min_priority)
+    def update_priorities(self, indices, td_errors):
+        for idx, td_error in zip(indices, td_errors):
+            priority = abs(td_error) + self.epsilon
+            self.priorities[idx] = max(priority.item(), self.min_priority)

@@ -68,8 +68,11 @@ class Actor(nn.Module):
         price_tensor, prev_weights = state
         x = self.conv_layer(price_tensor)
 
+        # get the dimension
+        ndim = price_tensor.dim()
+
         # add previous weights to next conv layer
-        if price_tensor.dim() == 3:
+        if ndim == 3:
             # only one example
             dim = 0
             prev_weights = prev_weights.unsqueeze(0).unsqueeze(2)
@@ -91,7 +94,7 @@ class Actor(nn.Module):
         logits = torch.cat([cash_bias, x], dim=dim)
         # current_weights = self.softmax(x).view(-1)
 
-        return logits
+        return logits.squeeze(-1) if ndim == 3 else logits.squeeze(1).squeeze(-1)
 
 
 class Critic(nn.Module):
@@ -154,13 +157,12 @@ class Critic(nn.Module):
         xt, prev_weights = state
         price_features = self.conv_layer(xt)
 
-        # process actions
-        actions = torch.cat([current_weights, prev_weights], dim=-1)
+        actions = torch.cat([current_weights, prev_weights], dim=1)
         action_features = self.fc_layer(actions)
 
         # combine features
-        combined = torch.cat([price_features.view(-1), action_features], dim=-1)
+        combined = torch.cat([price_features, action_features], dim=1)
 
         # estimate the q value
         q_value = self.q_layer(combined)
-        return q_value
+        return q_value.view(-1)

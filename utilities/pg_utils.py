@@ -1,3 +1,6 @@
+from typing import List
+
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
@@ -55,3 +58,20 @@ class RewardNormalizer:
         if std == float("inf") or std == 0:  # Handle edge case for very few rewards
             return reward
         return (reward - mean) / std
+
+
+def plot_performance(
+    actor_losses: List[float], critic_losses: List[float], total_rewards: List[float]
+):
+    episodes = range(len(actor_losses))
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(episodes, actor_losses, label="Actor Loss", marker="o")
+    plt.plot(episodes, critic_losses, label="Critic Loss", marker="o")
+    plt.plot(episodes, total_rewards, label="Total Reward", marker="o")
+    plt.title("Training Metrics Over Episodes", fontsize=16)
+    plt.xlabel("Episode", fontsize=12)
+    plt.ylabel("Value", fontsize=12)
+    plt.legend(fontsize=12)
+    plt.grid(True)
+    plt.show()
