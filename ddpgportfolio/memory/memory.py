@@ -130,24 +130,46 @@ class PrioritizedReplayMemory:
         self.pos = (self.pos + 1) % self.capacity
 
     def sample(
-        self, batch_size, beta=0.4
+        self, batch_size, beta=0.4, p_recent=0.5
     ) -> Tuple[Tuple[Experience, torch.tensor, np.ndarray]]:
-        """Sample a batch of experiences based on priority."""
+
         # Decay alpha and beta over time
         self.alpha = max(
             0.1, self.alpha - self.alpha_decay_rate
         )  # Ensure alpha doesn't go below 0.1
         self.beta = min(1.0, beta + self.beta_decay_rate)  # Gradually increase beta
 
-        # Normalize the priorities and calculate the probabilities
-        priorities = np.array(self.priorities) ** self.alpha
-        prob = priorities / priorities.sum()
+        # Partition the buffer into recent and older sections
+        recent_cutoff = int(len(self.buffer) * 0.2)  # Top 20% of the buffer is recent
+        recent_indices = list(range(len(self.buffer) - recent_cutoff, len(self.buffer)))
+        older_indices = list(range(0, len(self.buffer) - recent_cutoff))
 
-        # Sample batch of experiences based on the probabilities
-        indices = np.random.choice(len(self), batch_size, p=prob)
+        # Number of samples from each partition
+        n_recent = int(batch_size * p_recent)
+        n_older = batch_size - n_recent
 
-        # Compute importance-sampling weights (using beta)
-        weights = (len(self.buffer) / prob[indices]) ** self.beta
+        # Normalize the priorities within each partition
+        recent_priorities = np.array(self.priorities)[recent_indices] ** self.alpha
+        older_priorities = np.array(self.priorities)[older_indices] ** self.alpha
+
+        # Calculate probabilities for sampling
+        prob_recent = recent_priorities / recent_priorities.sum()
+        prob_older = older_priorities / older_priorities.sum()
+
+        # Sample indices from each partition
+        sampled_recent = np.random.choice(recent_indices, size=n_recent, p=prob_recent)
+        sampled_older = np.random.choice(older_indices, size=n_older, p=prob_older)
+
+        # Combine sampled indices and shuffle
+        indices = np.concatenate([sampled_recent, sampled_older])
+        np.random.shuffle(indices)
+
+        # Compute importance-sampling weights for combined indices
+        combined_priorities = np.array(self.priorities)[indices]
+        prob_combined = (
+            combined_priorities**self.alpha / (combined_priorities**self.alpha).sum()
+        )
+        weights = (len(self.buffer) * prob_combined) ** -self.beta
         weights /= weights.max()  # Normalize to avoid large weights
 
         # Extract the actual experiences from the buffer using the indices
@@ -184,6 +206,17 @@ class PrioritizedReplayMemory:
         return experience, indices, weights
 
     def update_priorities(self, indices, td_errors):
-        for idx, td_error in zip(indices, td_errors):
-            priority = abs(td_error) + self.epsilon
-            self.priorities[idx] = max(priority.item(), self.min_priority)
+        # Ensure priorities are non-negative and account for epsilon to avoid zero priority
+        td_error_priorities = td_errors.abs() + self.epsilon
+
+        # Normalize recency bias
+        recency_bias = 1 - (
+            np.array(indices) / len(self.buffer)
+        )  # Most recent = 1, oldest = 0
+
+        # Weight TD errors and recency bias
+        for idx, (priority, recency) in zip(
+            indices, zip(td_error_priorities, recency_bias)
+        ):
+            combined_priority = self.alpha * priority + (1 - self.alpha) * recency
+            self.priorities[idx] = max(combined_priority.item(), self.min_priority)

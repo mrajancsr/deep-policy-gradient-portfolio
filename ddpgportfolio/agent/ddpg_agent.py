@@ -52,7 +52,7 @@ class DDPGAgent:
     epsilon_min: float = 0.01
     epsilon_decay_rate: float = 1e-5
     episode_count: int = 0
-    warmup_steps: int = 100
+    warmup_steps: int = 200
 
     def __post_init__(self):
         # create dataset and dataloaders for proper iteration
@@ -95,7 +95,7 @@ class DDPGAgent:
             torch.zeros(m_noncash_assets), self.window_size - 2
         )
         self.replay_memory = PrioritizedReplayMemory(
-            capacity=100000,
+            capacity=20000,
         )
         self.update_target_networks()
 
@@ -277,7 +277,7 @@ class DDPGAgent:
             action = self.select_action(state, exploration=True).detach()
 
             # store the current action into pvm
-            self.pvm.update_memory_stack(action, prev_index + 1)
+            # self.pvm.update_memory_stack(action, prev_index + 1)
 
             # get the relative price vector from price tensor to calculate reward
             yt = 1 / xt[0, :, -2]
@@ -349,6 +349,7 @@ class DDPGAgent:
                 td_error, critic_loss = self.train_critic(experiences, is_weights)
 
                 # Update priorities in the replay buffer (for prioritized experience replay)
+
                 self.replay_memory.update_priorities(indices, td_error)
 
                 # Update actor (deterministic policy gradient)
