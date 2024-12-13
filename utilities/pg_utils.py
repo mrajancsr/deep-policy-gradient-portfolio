@@ -63,15 +63,32 @@ class RewardNormalizer:
 def plot_performance(
     actor_losses: List[float], critic_losses: List[float], total_rewards: List[float]
 ):
-    episodes = range(len(actor_losses))
+
+    episodes = range(1, len(actor_losses) + 1)
 
     plt.figure(figsize=(12, 6))
-    plt.plot(episodes, actor_losses, label="Actor Loss", marker="o")
-    plt.plot(episodes, critic_losses, label="Critic Loss", marker="o")
-    plt.plot(episodes, total_rewards, label="Total Reward", marker="o")
-    plt.title("Training Metrics Over Episodes", fontsize=16)
-    plt.xlabel("Episode", fontsize=12)
-    plt.ylabel("Value", fontsize=12)
-    plt.legend(fontsize=12)
+
+    # Plot actor and critic losses
+    plt.plot(episodes, actor_losses, label="Actor Loss", color="blue")
+    plt.plot(episodes, critic_losses, label="Critic Loss", color="orange")
+    plt.title("Actor and Critic Losses Over Episodes")
+    plt.xlabel("Episode")
+    plt.ylabel("Loss")
+    plt.legend()
     plt.grid(True)
+    plt.show()
+
+    plt.figure(figsize=(12, 6))
+
+    plt.plot(episodes, total_rewards, label="Total Reward", color="green")
+    plt.plot(
+        episodes, np.cumsum(total_rewards), label="Cumulative Reward", color="blue"
+    )
+
+    plt.title("Cumulative Reward (Log Scale)")
+    plt.xlabel("Episode")
+    plt.ylabel("Reward")
+    plt.legend()
+    plt.grid(True)
+    plt.yscale("log")
     plt.show()

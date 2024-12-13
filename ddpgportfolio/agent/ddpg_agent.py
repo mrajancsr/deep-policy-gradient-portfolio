@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
