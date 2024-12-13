@@ -46,11 +46,11 @@ class DDPGAgent:
     replay_memory: PrioritizedReplayMemory = field(init=False)
 
     gamma: float = 0.9
-    tau: float = 0.001
+    tau: float = 0.01
     epsilon: float = 0.0
     epsilon_max: float = 1.0
     epsilon_min: float = 0.01
-    epsilon_decay_rate: float = 1e-4
+    epsilon_decay_rate: float = 1e-5
     episode_count: int = 0
     warmup_steps: int = 100
 

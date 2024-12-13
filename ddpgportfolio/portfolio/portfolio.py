@@ -193,31 +193,52 @@ class Portfolio:
             torch.abs(wt - wt_prev), dim=-1
         )  # penalize large changes in portfolio weights
         # Compute transaction cost penalty: this is based on the change in portfolio weights
-        transaction_penalty = 0.001 * weight_change_penalty
+        transaction_penalty = 0.0005 * weight_change_penalty
         ut = self.get_transacton_remainder_factor(wt, yt, wt_prev)
 
         # get cash weight
-        wt_prev_cash = 1 - wt_prev.sum()
+        wt_prev_cash = 1 - wt_prev.sum(dim=-1, keepdim=True)
         # portfolio return before transaction cost
 
         yt_with_cash = torch.concat(
             [torch.tensor(1 + rf_period).unsqueeze(0), yt], dim=-1
         )
-        wt_prev_with_cash = torch.concat(
-            [torch.tensor(wt_prev_cash).unsqueeze(0), wt_prev], dim=-1
-        )
+        wt_prev_with_cash = torch.concat([wt_prev_cash, wt_prev], dim=-1)
         portfolio_return = yt_with_cash.dot(wt_prev_with_cash)
 
         # Avoid log(0) or negative values by adding a small epsilon
         epsilon = 1e-6
         reward = torch.log(ut * portfolio_return + epsilon)
+        relative_penalty = portfolio_return.abs().mean()
 
         # Shaped reward (reward + penalties)
         shaped_reward = (
-            reward - 0.05 * weight_change_penalty - 0.1 * transaction_penalty
+            reward
+            - 0.05 * weight_change_penalty / relative_penalty
+            - 0.02 * transaction_penalty / relative_penalty
         )  # tune the penalties
 
         return shaped_reward
+
+    def update_portfolio_value(
+        self,
+        previous_value,
+        wt: torch.tensor,
+        yt: torch.tensor,
+        wt_prev: torch.tensor,
+    ):
+        ut = self.get_transacton_remainder_factor(wt, yt, wt_prev)
+        # get cash weight
+        wt_prev_cash = 1 - wt_prev.sum()
+        # portfolio return before transaction cost
+
+        cash = torch.ones(1)
+
+        yt_with_cash = torch.concat([cash, yt], dim=-1)
+        wt_prev_with_cash = torch.concat([wt_prev_cash.unsqueeze(0), wt_prev], dim=-1)
+        portfolio_return = ut * yt_with_cash.dot(wt_prev_with_cash)
+        new_value = previous_value * portfolio_return
+        return new_value
 
 
 if __name__ == "__main__":
