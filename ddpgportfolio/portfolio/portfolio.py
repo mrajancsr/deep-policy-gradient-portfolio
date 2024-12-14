@@ -209,7 +209,7 @@ class Portfolio:
         # Avoid log(0) or negative values by adding a small epsilon
         epsilon = 1e-6
         reward = torch.log(ut * portfolio_return + epsilon)
-        relative_penalty = portfolio_return.abs().mean()
+        relative_penalty = portfolio_return.abs().mean() + 1e-6
 
         # Shaped reward (reward + penalties)
         shaped_reward = (
@@ -219,43 +219,3 @@ class Portfolio:
         )  # tune the penalties
 
         return shaped_reward
-
-    def update_portfolio_value(
-        self,
-        previous_value,
-        wt: torch.tensor,
-        yt: torch.tensor,
-        wt_prev: torch.tensor,
-    ):
-        ut = self.get_transacton_remainder_factor(wt, yt, wt_prev)
-        # get cash weight
-        wt_prev_cash = 1 - wt_prev.sum()
-        # portfolio return before transaction cost
-
-        cash = torch.ones(1)
-
-        yt_with_cash = torch.concat([cash, yt], dim=-1)
-        wt_prev_with_cash = torch.concat([wt_prev_cash.unsqueeze(0), wt_prev], dim=-1)
-        portfolio_return = ut * yt_with_cash.dot(wt_prev_with_cash)
-        new_value = previous_value * portfolio_return
-        return new_value
-
-
-if __name__ == "__main__":
-    # used for debugging purposes
-    m_assets: List[str] = [
-        "CASH",
-        "SOL",
-        "ADA",
-        "USDT",
-        "AVAX",
-        "LINK",
-        "DOT",
-        "PEPE",
-        "ETH",
-        "XRP",
-        "TRX",
-        "MATIC",
-    ]
-    port = Portfolio(asset_names=m_assets)
-    print(port)
