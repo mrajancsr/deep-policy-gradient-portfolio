@@ -17,7 +17,11 @@ from ddpgportfolio.memory.memory import (
     PrioritizedReplayMemory,
 )
 from ddpgportfolio.portfolio.portfolio import Portfolio
-from utilities.pg_utils import RewardNormalizer, plot_performance
+from utilities.pg_utils import (
+    RewardNormalizer,
+    normalize_batch_rewards,
+    plot_performance,
+)
 
 torch.set_default_device("mps")
 
@@ -46,13 +50,13 @@ class DDPGAgent:
     replay_memory: PrioritizedReplayMemory = field(init=False)
 
     gamma: float = 0.9
-    tau: float = 0.01
-    epsilon: float = 0.0
+    tau: float = 0.05
+    epsilon: float = 1.0
     epsilon_max: float = 1.0
     epsilon_min: float = 0.01
     epsilon_decay_rate: float = 1e-5
     episode_count: int = 0
-    warmup_steps: int = 200
+    warmup_steps: int = 1000
 
     def __post_init__(self):
         # create dataset and dataloaders for proper iteration
@@ -66,9 +70,10 @@ class DDPGAgent:
         )
 
         # create actor and critic networks and specify optimizers and learning rates
+        m_assets = self.portfolio.m_assets
         m_noncash_assets = self.portfolio.m_noncash_assets
         self.actor = Actor(3, m_noncash_assets)
-        self.critic = Critic(3, m_noncash_assets)
+        self.critic = Critic(3, m_assets)
         self.target_actor = self.clone_network(self.actor)
         self.target_critic = self.clone_network(self.critic)
         self.actor_optimizer = torch.optim.Adam(
@@ -126,7 +131,11 @@ class DDPGAgent:
 
     def update_epsilon(self):
         if self.episode_count < self.warmup_steps:
-            self.epsilon = (self.epsilon_max / self.warmup_steps) * self.episode_count
+            self.epsilon = (
+                self.epsilon_max
+                - ((self.epsilon_max - 0.5) / self.warmup_steps) * self.episode_count
+            )
+
         else:
             self.epsilon = max(
                 self.epsilon_min,
@@ -199,6 +208,11 @@ class DDPGAgent:
         self.actor_optimizer.step()
         return predicted_actions[:, 1:], actor_loss.item()
 
+    def _normalize_batch_rewards(self, rewards):
+        mean = rewards.mean()
+        std = rewards.std()
+        return (rewards - mean) / (std + 1e-5)
+
     def train_critic(self, experience: Experience, is_weights):
         """Train the critic by minimizing loss based on TD Error
 
@@ -246,7 +260,7 @@ class DDPGAgent:
             next_q_values = self.target_critic(next_state, next_target_action)
 
             # calculate target q values using bellman equation
-            td_target = reward + self.gamma * next_q_values
+            td_target = normalize_batch_rewards(reward) + self.gamma * next_q_values
 
         # compute the critic loss using MSE between predicted Q-values and target Q-values
         # Hence we are minimizing the TD Error
@@ -375,7 +389,7 @@ class DDPGAgent:
             rewards.append(total_episodic_reward)
 
             print(
-                f"Episode {episode + 1} - Actor Loss: {avg_episode_actor_loss:.4f}, Critic Loss: {avg_episode_critic_loss:.4f}, Total Reward: {total_episodic_reward:.4f}"
+                f"Episode {episode + 1} - Actor Loss: {avg_episode_actor_loss:.4f}, Critic Loss: {avg_episode_critic_loss:.4f}, Total Reward: {total_episodic_reward/batch_size:.4f}"
             )
 
             # Update target networks after each episode

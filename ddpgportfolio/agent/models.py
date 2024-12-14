@@ -10,12 +10,17 @@ import torch.nn as nn
 
 
 def weights_init(m):
-    classname = m.__class__.__name__
-    if classname.find("Conv") != -1:
-        nn.init.kaiming_normal_(m.weight.data, nonlinearity="relu")
-    elif classname.find("BatchNorm") != -1:
-        nn.init.normal_(m.weight.data, 1.0, 0.02)
-        nn.init.constant_(m.bias.data, 0)
+    if isinstance(m, nn.Conv2d):
+        nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
+        if m.bias is not None:
+            nn.init.constant_(m.bias, 0)
+    elif isinstance(m, nn.Linear):
+        nn.init.xavier_uniform_(m.weight)
+        if m.bias is not None:
+            nn.init.constant_(m.bias, 0)
+    elif isinstance(m, nn.BatchNorm2d):
+        nn.init.constant_(m.weight, 1)
+        nn.init.constant_(m.bias, 0)
 
 
 class Actor(nn.Module):
@@ -98,7 +103,7 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, input_channels: int = 3, m_assets: int = 11):
+    def __init__(self, input_channels: int = 3, m_assets: int = 12):
         """Critic network for DDPG.  Given a state (Xt, w(t-1)), this network outputs the Q-Value
 
         Parameters
@@ -111,23 +116,34 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
         self.m_assets = m_assets
         self.conv_layer = nn.Sequential(
-            nn.Conv2d(
-                input_channels, 2, kernel_size=(1, 3), stride=(1, 1), padding=(0, 0)
-            ),
-            nn.LeakyReLU(0.01, inplace=True),
-            nn.Conv2d(2, 20, kernel_size=(1, 48), stride=1, padding=(0, 0)),
-            nn.LeakyReLU(0.01, inplace=True),
+            nn.Conv2d(input_channels, 16, kernel_size=(1, 3), stride=(1, 1)),
+            nn.BatchNorm2d(16),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, 32, kernel_size=(1, 3), stride=(1, 1)),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=(1, 5), stride=(1, 1)),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
         )
 
         # fully connected layer for actions
-        self.fc_layer = nn.Sequential(nn.Linear(24, 64), nn.ReLU(True))
+        self.fc_layer = nn.Sequential(
+            nn.Linear(m_assets * 2, 128),
+            nn.ReLU(True),
+            nn.Linear(128, 128),
+            nn.ReLU(True),
+        )
 
         # q layer to evaluate the state and action
         self.q_layer = nn.Sequential(
-            nn.Linear(20 * m_assets + 64, 128),
+            nn.Linear(64 + 128, 128),
             nn.ReLU(True),
-            nn.Linear(128, 1),
+            nn.Linear(128, 64),
+            nn.ReLU(True),
+            nn.Linear(64, 1),
         )
 
         self.apply(weights_init)

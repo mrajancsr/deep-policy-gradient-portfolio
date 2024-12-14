@@ -213,9 +213,7 @@ class Portfolio:
 
         # Shaped reward (reward + penalties)
         shaped_reward = (
-            reward
-            - 0.05 * weight_change_penalty / relative_penalty
-            - 0.001 * transaction_penalty / relative_penalty
+            reward - 0.01 * weight_change_penalty - 0.001 * transaction_penalty
         )  # tune the penalties
 
         return shaped_reward

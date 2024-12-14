@@ -4,14 +4,17 @@
 # For more details, see: c.f https://arxiv.org/abs/1706.10059
 
 
+import random
 from typing import List
 
+import numpy as np
 import torch
 
 from ddpgportfolio.agent.ddpg_agent import DDPGAgent
-from ddpgportfolio.dataset import KrakenDataSet
 from ddpgportfolio.portfolio.portfolio import Portfolio
+from utilities.pg_utils import set_seed
 
+set_seed(111)
 torch.set_default_device("mps")
 
 

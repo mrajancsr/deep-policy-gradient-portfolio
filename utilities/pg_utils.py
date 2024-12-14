@@ -1,3 +1,4 @@
+import random
 from typing import List
 
 import matplotlib.pyplot as plt
@@ -60,6 +61,12 @@ class RewardNormalizer:
         return (reward - mean) / std
 
 
+def normalize_batch_rewards(rewards):
+    mean = rewards.mean()
+    std = rewards.std()
+    return (rewards - mean) / (std + 1e-5)
+
+
 def plot_performance(
     actor_losses: List[float], critic_losses: List[float], total_rewards: List[float]
 ):
@@ -92,3 +99,26 @@ def plot_performance(
     plt.grid(True)
     plt.yscale("log")
     plt.show()
+
+
+def set_seed(seed: int):
+    """
+    Set the seed for all relevant random number generators to ensure reproducibility.
+
+    Parameters:
+    seed (int): The seed value to set.
+    """
+    random.seed(seed)  # Python's built-in random
+    np.random.seed(seed)  # Numpy's random
+    torch.manual_seed(seed)  # Torch's random
+
+    # If using a GPU or MPS
+    if torch.backends.mps.is_available():
+        torch.manual_seed(seed)
+    elif torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)  # If using multi-GPU
+
+    # For deterministic behavior, optional
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
