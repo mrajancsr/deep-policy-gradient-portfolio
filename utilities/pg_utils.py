@@ -34,6 +34,7 @@ class RewardNormalizer:
         """
         Update the running statistics with a new reward.
         """
+        reward = np.clip(reward, -3, 3)
         self.count += 1
         delta = reward - self.mean
         self.mean += delta / self.count
