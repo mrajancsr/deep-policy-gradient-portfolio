@@ -11,7 +11,9 @@ class PortfolioVectorMemory:
     """Implements the Portfolio Vector Memory inspired by the idea of experience replay memory (Mnih et al., 2013),
     see pg. 13-14 of paper
     A Deep Reinforcement Learning Framework for the Financial Portfolio Management Problem
-    A PortfolioVectorMemory contains only non cash assets.
+
+    Note:
+        A PortfolioVectorMemory contains only non cash assets.
     """
 
     n_samples: int

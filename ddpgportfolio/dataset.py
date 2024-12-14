@@ -1,7 +1,5 @@
-from typing import Generator, Iterator
-
 import torch
-from torch.utils.data import DataLoader, Dataset, Sampler
+from torch.utils.data import Dataset
 
 from ddpgportfolio.portfolio.portfolio import Portfolio
 
@@ -55,14 +53,3 @@ class KrakenDataSet(Dataset):
         xt[2] = (self.low_pr[start:end,] / self.close_pr[end - 1,]).T
 
         return xt, end - 2
-
-
-class PriorizedReplayDataset(Dataset):
-    def __init__(self, replay_buffer):
-        self.replay_buffer = replay_buffer
-
-    def __len__(self):
-        return len(self.replay_buffer)
-
-    def __getitem__(self, idx):
-        return self.replay_buffer[idx]
