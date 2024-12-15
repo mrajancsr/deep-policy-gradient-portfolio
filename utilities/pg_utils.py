@@ -7,22 +7,25 @@ import torch
 
 
 class OrnsteinUhlenbeckNoise:
-    def __init__(self, size, mu=0.0, theta=0.15, sigma=0.3):
+    def __init__(self, size, mu=0.0, theta=0.15, sigma=0.3, device="mps"):
         self.mu = mu
         self.theta = theta
         self.sigma = sigma
         self.size = size
-        self.state = np.ones(self.size) * self.mu
+        self.device = device
         self.reset()
 
     def reset(self):
-        self.state = np.ones(self.size) * self.mu
+        self.state = np.full(self.size, self.mu, dtype=np.float32)
 
     def sample(self):
         x = self.state
         dx = self.theta * (self.mu - x) + self.sigma * np.random.randn(self.size)
         self.state = x + dx
-        return torch.tensor(self.state, dtype=torch.float32)
+        return torch.tensor(self.state, dtype=torch.float32, device=self.device)
+
+    def decay_sigma(self, decay_rate=0.99, min_sigma=0.05):
+        self.sigma = max(self.sigma * decay_rate, min_sigma)
 
 
 class RewardNormalizer:
