@@ -51,14 +51,20 @@ class DDPGAgent:
     replay_memory: PrioritizedReplayMemory = field(init=False)
     ou_noise: OrnsteinUhlenbeckNoise = field(init=False)
 
+    # target Q parameters
     gamma: float = 0.9
     tau: float = 0.05
+
+    # epsilon greedy parameters
     epsilon: float = 1.0
     epsilon_max: float = 1.0
     epsilon_min: float = 0.01
     epsilon_decay_rate: float = 1e-5
     episode_count: int = 0
     warmup_steps: int = 1000
+
+    # drawdown parameters
+    alpha: float = field(init=False, default=0.1)
 
     def __post_init__(self):
         # create dataset and dataloaders for proper iteration
@@ -288,7 +294,7 @@ class DDPGAgent:
             next_q_values = self.target_critic(next_state, next_target_action)
 
             # calculate target q values using bellman equation
-            td_target = normalize_batch_rewards(reward) + self.gamma * next_q_values
+            td_target = reward + self.gamma * next_q_values
 
         # compute the critic loss using MSE between predicted Q-values and target Q-values
         # Hence we are minimizing the TD Error
@@ -335,9 +341,15 @@ class DDPGAgent:
         # resetting ou process in the event of a new run
         self.ou_noise.reset()
 
+        # drawdown and portfolio value tracking
+        drawdown = 0
+        previous_portfolio_value = self.portfolio.get_initial_portfolio_value()
+        max_portfolio_value = previous_portfolio_value
+        portfolio_values = [previous_portfolio_value]
+
         n_samples = len(kraken_ds)
 
-        for i in range(1, n_samples + 49):
+        for i in range(1, n_samples):
             xt, prev_index = kraken_ds[i - 1]
             previous_action = self.pvm.get_memory_stack(prev_index)
             state = (xt, previous_action)
@@ -352,24 +364,45 @@ class DDPGAgent:
 
             # get the relative price vector from price tensor to calculate reward
             yt = 1 / xt[0, :, -2]
-            reward = self.portfolio.get_reward(action, yt, previous_action)
+            base_reward = self.portfolio.get_reward(action, yt, previous_action)
+
+            # use the base reward to get portfolio value at next time period
+            current_portfolio_value = self.portfolio.update_portfolio_value(
+                previous_portfolio_value, base_reward
+            )
+            portfolio_values.append(current_portfolio_value)
+            max_portfolio_value = max(max_portfolio_value, current_portfolio_value)
+            drawdown = (
+                max_portfolio_value - current_portfolio_value
+            ) / max_portfolio_value
+
+            # calculate reward with drawdown penalty
+            reward = base_reward
+
+            # normalize the reward
             reward_normalizer.update(reward.item())
             normalized_reward = reward_normalizer.normalize(reward.item())
+
+            # prepare next state
             xt_next, _ = kraken_ds[i]
             next_state = (xt_next, action)
+
+            # create experience and add to priority replay memory
             experience = Experience(
                 state, action, normalized_reward, next_state, prev_index
             )
             self.replay_memory.add(experience=experience, reward=normalized_reward)
-        print("pretraining done")
 
+        print("pretraining done")
         print(f"buffer size: {len(self.replay_memory)}")
 
-        # we subtract one since each experience consists of current state and next state
-        assert len(self.replay_memory) == n_samples + 48
+        # replay buffer contains state and next state hence we lose one dimension
+        assert len(self.replay_memory) == n_samples - 1
 
         # Critic warm-up phase
         # self.warm_up_critic(n_iterations=200)
+
+        self.portfolio.set_portfolio_values(portfolio_values)
 
     def train(self, n_episodes: int = 50, n_iterations_per_episode: int = 20):
         """Train the agent by training the actor and critic networks

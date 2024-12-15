@@ -100,7 +100,7 @@ def plot_performance(
     plt.ylabel("Reward")
     plt.legend()
     plt.grid(True)
-    plt.yscale("log")
+    # plt.yscale("log")
     plt.show()
 
 
