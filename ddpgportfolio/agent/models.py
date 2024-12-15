@@ -50,7 +50,7 @@ class Actor(nn.Module):
         self.cash_bias = nn.Parameter(torch.full((1, 1, 1), 0.7))
 
         self.cash_predictor = nn.Sequential(
-            nn.Linear(output_dim - 1, 10), nn.ReLU(), nn.Linear(10, 1)
+            nn.Linear(output_dim, 10), nn.ReLU(), nn.Linear(10, 1)
         )
         self.cash_predictor = nn.Sequential(
             nn.Linear(output_dim, 10), nn.ReLU(), nn.Linear(10, 1)
