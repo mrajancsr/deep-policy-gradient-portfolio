@@ -145,3 +145,9 @@ def compute_entropy(action_probs):
     log_probs = torch.log(action_probs + epsilon)
     entropy = -torch.sum(action_probs * log_probs, dim=1)  # Entropy for each sample
     return entropy.mean()  # Mean entropy across the batch
+
+
+def standardize(data):
+    mean = data.mean(dim=(0, 2), keepdim=True)
+    std = data.std(dim=(0, 2), keepdim=True) + 1e-8  # Avoid division by zero
+    return (data - mean) / (std + 1e-8)

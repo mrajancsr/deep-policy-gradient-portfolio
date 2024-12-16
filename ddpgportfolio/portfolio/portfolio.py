@@ -233,12 +233,12 @@ class Portfolio:
             reward - 0.01 * weight_change_penalty - 0.001 * transaction_penalty
         )  # tune the penalties
 
-        return shaped_reward
+        return reward
 
     def update_portfolio_value(self, previous_portfolio_value, reward: torch.tensor):
         return previous_portfolio_value * torch.exp(reward)
 
-    def calculate_final_equity_return(equity_curve: List[float]):
+    def calculate_final_equity_return(self, equity_curve: List[float]):
         """calculates total return from equity curve
 
         Parameters
@@ -256,7 +256,7 @@ class Portfolio:
         total_return = ((V_end - V_start) / V_start) * 100
         return total_return
 
-    def calculate_max_drawdown(equity_curve: List[float]) -> float:
+    def calculate_max_drawdown(self, equity_curve: List[float]) -> float:
         peak = equity_curve[0]
         max_drawdown = -sys.maxsize
         for value in equity_curve:

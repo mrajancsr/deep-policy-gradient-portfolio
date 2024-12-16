@@ -77,8 +77,7 @@ class DDPGAgent:
         m_noncash_assets = self.portfolio.m_noncash_assets
         self.actor = Actor(3, m_noncash_assets)
         self.critic = Critic(3, m_assets)
-        self.target_actor = self.clone_network(self.actor)
-        self.target_critic = self.clone_network(self.critic)
+
         self.actor_optimizer = torch.optim.Adam(
             self.actor.parameters(),
             lr=1e-5,
@@ -91,8 +90,6 @@ class DDPGAgent:
         )
         self.actor.to(self.device)
         self.critic.to(self.device)
-        self.target_actor.to(self.device)
-        self.target_critic.to(self.device)
 
         # loss function for the critic
         self.loss_fn = nn.MSELoss()
@@ -108,12 +105,6 @@ class DDPGAgent:
         self.replay_memory = PrioritizedReplayMemory(
             capacity=20000,
         )
-        self.update_target_networks()
-
-    def clone_network(self, network):
-        cloned_network = type(network)()
-        cloned_network.load_state_dict(network.state_dict())
-        return cloned_network
 
     def select_uniform_action(self, m):
         uniform_vec = np.random.uniform(0, 1, size=m)
@@ -240,7 +231,7 @@ class DDPGAgent:
         # hence we compute the q value and maximize this value
         q_values = self.critic(state, predicted_actions)
         entropy = compute_entropy(predicted_actions)
-        actor_loss = -q_values.mean() + beta * entropy
+        actor_loss = -q_values.mean()
         actor_loss = (actor_loss * is_weights).mean()
         # perform backprop
 
@@ -291,17 +282,8 @@ class DDPGAgent:
         actions = torch.cat([cash_weight_action.unsqueeze(1), noncash_actions], dim=1)
         predicted_q_values = self.critic(state, actions)
 
-        with torch.no_grad():
-            # the target actor uses next state from replay buffer
-            action_logits = self.target_actor(experience.next_state)
-            next_target_action = torch.softmax(action_logits, dim=1)
-            # since previous action in next state is current action in current state
-            xt_next = experience.next_state[0]
-            next_state = (xt_next, actions)
-            next_q_values = self.target_critic(next_state, next_target_action)
-
-            # calculate target q values using bellman equation
-            td_target = reward + self.gamma * next_q_values
+        # calculate target q values using bellman equation
+        td_target = reward / self.batch_size
 
         # compute the critic loss using MSE between predicted Q-values and target Q-values
         # Hence we are minimizing the TD Error
@@ -366,14 +348,14 @@ class DDPGAgent:
             # get the relative price vector from price tensor to calculate reward
             yt = 1 / xt[0, :, -2]
             reward = self.portfolio.get_reward(action, yt, previous_action)
-            reward_normalizer.update(reward.item())
-            normalized_reward = reward_normalizer.normalize(reward.item())
+            # reward_normalizer.update(reward.item())
+            # normalized_reward = reward_normalizer.normalize(reward.item())
             xt_next, _ = kraken_ds[i]
             next_state = (xt_next, action)
             experience = Experience(
-                state, action, normalized_reward, next_state, prev_index
+                state, action, reward.item(), next_state, prev_index
             )
-            self.replay_memory.add(experience=experience, reward=normalized_reward)
+            self.replay_memory.add(experience=experience, reward=reward.item())
         print("pretraining done")
 
         print(f"buffer size: {len(self.replay_memory)}")
@@ -466,7 +448,7 @@ class DDPGAgent:
             )
 
             # Update target networks after each episode
-            self.update_target_networks()
+            # self.update_target_networks()
 
         print("Training complete!")
         # performance plots
