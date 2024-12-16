@@ -125,3 +125,23 @@ def set_seed(seed: int):
     # For deterministic behavior, optional
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
+
+def compute_entropy(action_probs):
+    """
+    Compute the entropy of the action probabilities.
+
+    Parameters
+    ----------
+    action_probs : torch.tensor
+        Tensor of shape (batch_size, num_actions) representing action probabilities.
+
+    Returns
+    -------
+    entropy : torch.tensor
+        The mean entropy across the batch.
+    """
+    epsilon = 1e-8  # To avoid log(0)
+    log_probs = torch.log(action_probs + epsilon)
+    entropy = -torch.sum(action_probs * log_probs, dim=1)  # Entropy for each sample
+    return entropy.mean()  # Mean entropy across the batch

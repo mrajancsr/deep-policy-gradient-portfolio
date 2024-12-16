@@ -20,6 +20,7 @@ from ddpgportfolio.portfolio.portfolio import Portfolio
 from utilities.pg_utils import (
     OrnsteinUhlenbeckNoise,
     RewardNormalizer,
+    compute_entropy,
     normalize_batch_rewards,
     plot_performance,
 )
@@ -58,7 +59,7 @@ class DDPGAgent:
     epsilon_min: float = 0.01
     epsilon_decay_rate: float = 1e-5
     episode_count: int = 0
-    warmup_steps: int = 1000
+    warmup_steps: int = 6000
 
     def __post_init__(self):
         # create dataset and dataloaders for proper iteration
@@ -97,7 +98,7 @@ class DDPGAgent:
         self.loss_fn = nn.MSELoss()
 
         # ou noise initialization
-        self.ou_noise = OrnsteinUhlenbeckNoise(size=m_assets, theta=0.20, sigma=0.3)
+        self.ou_noise = OrnsteinUhlenbeckNoise(size=m_assets, theta=0.20, sigma=0.5)
 
         # initializing pvm with all cash initially
         self.pvm = PortfolioVectorMemory(self.portfolio.n_samples, m_noncash_assets)
@@ -114,9 +115,9 @@ class DDPGAgent:
         cloned_network.load_state_dict(network.state_dict())
         return cloned_network
 
-    def get_random_action(self, m):
-        random_vec = np.random.rand(m)
-        return torch.tensor(random_vec / np.sum(random_vec), dtype=torch.float32)
+    def select_uniform_action(self, m):
+        uniform_vec = np.random.uniform(0, 1, size=m)
+        return torch.tensor(uniform_vec / np.sum(uniform_vec), dtype=torch.float32)
 
     def select_action(
         self,
@@ -143,14 +144,23 @@ class DDPGAgent:
         with torch.no_grad():
             action_logits = self.actor(state)
         if exploration:
-            if action_type == "greedy" and np.random.rand() < self.epsilon:
-                action = self.get_random_action(self.portfolio.m_assets)
-                self.update_epsilon()
-                return action[1:]
-            elif action_type == "ou":
+            if action_type == "hybrid":
+                if self.episode_count < self.warmup_steps:
+                    action = self.select_uniform_action(self.portfolio.m_assets)
+                    self.episode_count += 1
+                    return action[1:]
+                else:
+                    # transition to ou noise after warm up steps
+                    action_type = "ou"
+            if action_type == "ou":
                 noise = self.ou_noise.sample()
                 action_logits += noise
                 self.ou_noise.decay_sigma()
+
+            elif action_type == "greedy" and np.random.rand() < self.epsilon:
+                action = self.get_uniform_action(self.portfolio.m_assets)
+                self.update_epsilon()
+                return action[1:]
 
         action = torch.softmax(action_logits.view(-1), dim=-1)
 
@@ -199,7 +209,9 @@ class DDPGAgent:
                 tau * main_param.data + (1.0 - tau) * target_param.data
             )
 
-    def train_actor(self, experience: Experience, is_weights: torch.tensor):
+    def train_actor(
+        self, experience: Experience, is_weights: torch.tensor, beta: float = 0.05
+    ):
         """trains the actor network by maximizing the Q Value from Critic
 
         Parameters
@@ -227,7 +239,8 @@ class DDPGAgent:
         # actor has to choose action that maximizes the q value
         # hence we compute the q value and maximize this value
         q_values = self.critic(state, predicted_actions)
-        actor_loss = -q_values.mean()
+        entropy = compute_entropy(predicted_actions)
+        actor_loss = -q_values.mean() + beta * entropy
         actor_loss = (actor_loss * is_weights).mean()
         # perform backprop
 
@@ -288,7 +301,7 @@ class DDPGAgent:
             next_q_values = self.target_critic(next_state, next_target_action)
 
             # calculate target q values using bellman equation
-            td_target = normalize_batch_rewards(reward) + self.gamma * next_q_values
+            td_target = reward + self.gamma * next_q_values
 
         # compute the critic loss using MSE between predicted Q-values and target Q-values
         # Hence we are minimizing the TD Error
@@ -344,7 +357,7 @@ class DDPGAgent:
 
             # get current weight from actor network given s = (Xt, wt_prev)
             action = self.select_action(
-                state, exploration=True, action_type="ou"
+                state, exploration=True, action_type="hybrid"
             ).detach()
 
             # store the current action into pvm

@@ -140,7 +140,7 @@ class PrioritizedReplayMemory:
         self.beta = min(1.0, beta + self.beta_decay_rate)  # Gradually increase beta
 
         # Partition the buffer into recent and older sections
-        recent_cutoff = int(len(self.buffer) * 0.2)  # Top 20% of the buffer is recent
+        recent_cutoff = int(len(self.buffer) * 0.4)  # Top 20% of the buffer is recent
         recent_indices = list(range(len(self.buffer) - recent_cutoff, len(self.buffer)))
         older_indices = list(range(0, len(self.buffer) - recent_cutoff))
 
