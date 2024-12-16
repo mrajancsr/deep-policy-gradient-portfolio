@@ -1,6 +1,6 @@
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -61,3 +61,162 @@ class ExperienceReplayMemory:
     def sample(self) -> Tuple:
         idx = np.random.choice(len(self.buffer), replace=False)
         return self.buffer[idx]
+
+
+@dataclass
+class Experience:
+    state: Tuple[torch.tensor, torch.tensor]
+    action: torch.tensor
+    reward: torch.tensor
+    next_state: Tuple[torch.tensor, torch.tensor]
+    previous_index: torch.tensor
+
+    def __repr__(self):
+        return "Experience"
+
+
+@dataclass
+class PrioritizedReplayMemory:
+    """Implements the Prioritized Experience Replay of Schaul, Quan et al (2016)
+    https://arxiv.org/pdf/1511.05952
+    by prioritizing experiences with better rewards
+    """
+
+    capacity: int
+    alpha: Optional[float] = 0.6
+    epsilon: Optional[float] = 1e-5
+    beta_decay_rate: Optional[float] = 0.01
+    alpha_decay_rate: Optional[float] = 0.001
+    min_priority: float = 0.1
+    device: Optional[str] = "mps"
+    buffer: List[Experience] = field(init=False, default_factory=lambda: [])
+    pos: int = field(init=False, default=0)
+    priorities: List[float] = field(init=False, default_factory=lambda: [])
+
+    def __repr__(self):
+        return f"Total Experiences: {len(self.buffer)}"
+
+    def __len__(self):
+        return len(self.buffer)
+
+    def peek_buffer(self):
+        return self.buffer[-1]
+
+    def peek_priorities(self):
+        return self.priorities[-1]
+
+    def add(self, experience: Experience, reward: float):
+        """_summary_
+
+        Parameters
+        ----------
+        experience : Experience
+            _description_
+        reward : torch.tensor
+            _description_
+        """
+        priority = abs(reward) + self.epsilon
+
+        if len(self.buffer) < self.capacity:
+            # add experiencs and their priority
+            self.buffer.append(experience)
+            self.priorities.append(priority)
+        else:
+            # overwrite experience at position pos
+            self.buffer[self.pos] = experience
+            self.priorities[self.pos] = priority
+
+        self.priorities[self.pos] = max(priority, self.min_priority)
+        self.pos = (self.pos + 1) % self.capacity
+
+    def sample(
+        self, batch_size, beta=0.4, p_recent=0.5
+    ) -> Tuple[Tuple[Experience, torch.tensor, np.ndarray]]:
+
+        # Decay alpha and beta over time
+        self.alpha = max(
+            0.1, self.alpha - self.alpha_decay_rate
+        )  # Ensure alpha doesn't go below 0.1
+        self.beta = min(1.0, beta + self.beta_decay_rate)  # Gradually increase beta
+
+        # Partition the buffer into recent and older sections
+        recent_cutoff = int(len(self.buffer) * 0.4)  # Top 20% of the buffer is recent
+        recent_indices = list(range(len(self.buffer) - recent_cutoff, len(self.buffer)))
+        older_indices = list(range(0, len(self.buffer) - recent_cutoff))
+
+        # Number of samples from each partition
+        n_recent = int(batch_size * p_recent)
+        n_older = batch_size - n_recent
+
+        # Normalize the priorities within each partition
+        recent_priorities = np.array(self.priorities)[recent_indices] ** self.alpha
+        older_priorities = np.array(self.priorities)[older_indices] ** self.alpha
+
+        # Calculate probabilities for sampling
+        prob_recent = recent_priorities / recent_priorities.sum()
+        prob_older = older_priorities / older_priorities.sum()
+
+        # Sample indices from each partition
+        sampled_recent = np.random.choice(recent_indices, size=n_recent, p=prob_recent)
+        sampled_older = np.random.choice(older_indices, size=n_older, p=prob_older)
+
+        # Combine sampled indices and shuffle
+        indices = np.concatenate([sampled_recent, sampled_older])
+        np.random.shuffle(indices)
+
+        # Compute importance-sampling weights for combined indices
+        combined_priorities = np.array(self.priorities)[indices]
+        prob_combined = (
+            combined_priorities**self.alpha / (combined_priorities**self.alpha).sum()
+        )
+        weights = (len(self.buffer) * prob_combined) ** -self.beta
+        weights /= weights.max()  # Normalize to avoid large weights
+
+        # Extract the actual experiences from the buffer using the indices
+        experiences = [self.buffer[idx] for idx in indices]
+
+        xt, prev_action, action, reward, xt_next, prev_index = zip(
+            *[
+                (
+                    *(exp.state[0], exp.state[1]),
+                    exp.action,
+                    exp.reward,
+                    exp.next_state[0],
+                    exp.previous_index,
+                )
+                for exp in experiences
+            ]
+        )
+
+        xt = torch.stack(xt)
+        prev_action = torch.stack(prev_action)
+        action = torch.stack(action)
+        reward = torch.tensor(reward, dtype=torch.float32)
+        xt_next = torch.stack(xt_next)
+        prev_index = torch.tensor(prev_index)
+
+        experience = Experience(
+            (xt, prev_action), action, reward, (xt_next, action), prev_index
+        )
+
+        weights = torch.tensor(
+            weights, dtype=torch.float32
+        )  # Convert weights to torch tensor
+
+        return experience, indices, weights
+
+    def update_priorities(self, indices, td_errors):
+        # Ensure priorities are non-negative and account for epsilon to avoid zero priority
+        td_error_priorities = td_errors.abs() + self.epsilon
+
+        # Normalize recency bias
+        recency_bias = 1 - (
+            np.array(indices) / len(self.buffer)
+        )  # Most recent = 1, oldest = 0
+
+        # Weight TD errors and recency bias
+        for idx, (priority, recency) in zip(
+            indices, zip(td_error_priorities, recency_bias)
+        ):
+            combined_priority = self.alpha * priority + (1 - self.alpha) * recency
+            self.priorities[idx] = max(combined_priority.item(), self.min_priority)

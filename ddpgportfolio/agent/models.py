@@ -10,12 +10,17 @@ import torch.nn as nn
 
 
 def weights_init(m):
-    classname = m.__class__.__name__
-    if classname.find("Conv") != -1:
-        nn.init.kaiming_normal_(m.weight.data, nonlinearity="relu")
-    elif classname.find("BatchNorm") != -1:
-        nn.init.normal_(m.weight.data, 1.0, 0.02)
-        nn.init.constant_(m.bias.data, 0)
+    if isinstance(m, nn.Conv2d):
+        nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
+        if m.bias is not None:
+            nn.init.constant_(m.bias, 0)
+    elif isinstance(m, nn.Linear):
+        nn.init.xavier_uniform_(m.weight)
+        if m.bias is not None:
+            nn.init.constant_(m.bias, 0)
+    elif isinstance(m, nn.BatchNorm2d):
+        nn.init.constant_(m.weight, 1)
+        nn.init.constant_(m.bias, 0)
 
 
 class Actor(nn.Module):
@@ -42,8 +47,8 @@ class Actor(nn.Module):
         self.conv_layer_with_weights = nn.Sequential(
             nn.Conv2d(21, 1, kernel_size=(1, 1), stride=1)
         )
-        self.cash_bias = nn.Parameter(torch.full((1, 1, 1), 0.7))
-        self.softmax = nn.Softmax(dim=1)
+        self.cash_bias = nn.Parameter(torch.full((1, 1, 1), 0.3))
+
         self.apply(weights_init)
 
     def forward(self, state: Tuple[torch.tensor, torch.tensor]) -> torch.tensor:
@@ -68,22 +73,37 @@ class Actor(nn.Module):
         price_tensor, prev_weights = state
         x = self.conv_layer(price_tensor)
 
+        # get the dimension
+        ndim = price_tensor.dim()
+
         # add previous weights to next conv layer
-        prev_weights = prev_weights.unsqueeze(0).unsqueeze(2)
-        x = torch.cat([x, prev_weights], dim=0)
+        if ndim == 3:
+            # only one example
+            dim = 0
+            prev_weights = prev_weights.unsqueeze(0).unsqueeze(2)
+            x = torch.cat([x, prev_weights], dim=dim)
+            cash_bias = self.cash_bias.expand(1, 1, 1)
+            dim += 1
+        else:
+            # we have a batch of examples now
+            dim = 1
+            prev_weights = prev_weights.unsqueeze(1).unsqueeze(3)
+            x = torch.cat([x, prev_weights], dim=dim)
+            batch_size = x.shape[0]
+            cash_bias = self.cash_bias.expand(batch_size, 1, 1, 1)
+            dim += 1
+
         x = self.conv_layer_with_weights(x)
 
         # add a cash bias to the layer before voting
-        cash_bias = self.cash_bias.expand(1, 1, 1)
-        x = torch.cat([cash_bias, x], dim=1)
-        current_weights = self.softmax(x).view(-1)
+        logits = torch.cat([cash_bias, x], dim=dim)
+        # current_weights = self.softmax(x).view(-1)
 
-        # return only non-cash weights
-        return current_weights[1:]
+        return logits.squeeze(-1) if ndim == 3 else logits.squeeze(1).squeeze(-1)
 
 
 class Critic(nn.Module):
-    def __init__(self, input_channels: int = 3, m_assets: int = 11):
+    def __init__(self, input_channels: int = 3, m_assets: int = 12):
         """Critic network for DDPG.  Given a state (Xt, w(t-1)), this network outputs the Q-Value
 
         Parameters
@@ -96,22 +116,34 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
         self.m_assets = m_assets
         self.conv_layer = nn.Sequential(
-            nn.Conv2d(
-                input_channels, 2, kernel_size=(1, 3), stride=(1, 1), padding=(0, 0)
-            ),
-            nn.LeakyReLU(0.01, inplace=True),
-            nn.Conv2d(2, 20, kernel_size=(1, 48), stride=1, padding=(0, 0)),
-            nn.LeakyReLU(0.01, inplace=True),
-        )
-        self.conv_layer_with_weights = nn.Sequential(
-            nn.Conv2d(21, 20, kernel_size=(1, 1), stride=1),
-            nn.LeakyReLU(0.01, inplace=True),
+            nn.Conv2d(input_channels, 16, kernel_size=(1, 3), stride=(1, 1)),
+            nn.BatchNorm2d(16),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, 32, kernel_size=(1, 3), stride=(1, 1)),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=(1, 5), stride=(1, 1)),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
         )
+
+        # fully connected layer for actions
+        self.fc_layer = nn.Sequential(
+            nn.Linear(m_assets * 2, 128),
+            nn.ReLU(True),
+            nn.Linear(128, 128),
+            nn.ReLU(True),
+        )
+
+        # q layer to evaluate the state and action
         self.q_layer = nn.Sequential(
-            nn.Linear(20 * m_assets + m_assets, 128),
-            nn.LeakyReLU(0.01, inplace=True),
-            nn.Linear(128, 1),
+            nn.Linear(64 + 128, 128),
+            nn.ReLU(True),
+            nn.Linear(128, 64),
+            nn.ReLU(True),
+            nn.Linear(64, 1),
         )
 
         self.apply(weights_init)
@@ -138,17 +170,15 @@ class Critic(nn.Module):
         torch.tensor
             _description_
         """
-        price_tensor, prev_weights = state
-        x = self.conv_layer(price_tensor)
+        xt, prev_weights = state
+        price_features = self.conv_layer(xt)
 
-        # add previous weights to next conv layer
-        prev_weights = prev_weights.unsqueeze(0).unsqueeze(2)
-        x = torch.cat([x, prev_weights], dim=0)
-        x = self.conv_layer_with_weights(x)
+        actions = torch.cat([current_weights, prev_weights], dim=1)
+        action_features = self.fc_layer(actions)
 
-        # add current weights as q value evaluates state and action
-        x = torch.cat([x.view(-1), current_weights])
+        # combine features
+        combined = torch.cat([price_features, action_features], dim=1)
 
         # estimate the q value
-        q_value = self.q_layer(x)
-        return q_value
+        q_value = self.q_layer(combined)
+        return q_value.view(-1)
