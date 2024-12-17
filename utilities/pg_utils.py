@@ -70,9 +70,7 @@ def normalize_batch_rewards(rewards):
     return (rewards - mean) / (std + 1e-5)
 
 
-def plot_performance(
-    actor_losses: List[float], critic_losses: List[float], total_rewards: List[float]
-):
+def plot_performance(actor_losses: List[float], total_rewards: List[float]):
 
     episodes = range(1, len(actor_losses) + 1)
 
@@ -80,7 +78,7 @@ def plot_performance(
 
     # Plot actor and critic losses
     plt.plot(episodes, actor_losses, label="Actor Loss", color="blue")
-    plt.plot(episodes, critic_losses, label="Critic Loss", color="orange")
+
     plt.title("Actor and Critic Losses Over Episodes")
     plt.xlabel("Episode")
     plt.ylabel("Loss")

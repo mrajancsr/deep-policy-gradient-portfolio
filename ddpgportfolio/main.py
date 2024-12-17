@@ -52,7 +52,7 @@ def main():
     # need to pretrain the agent to populate the replay buffer with experiences
     agent.pre_train()
     # train the agent
-    agent.train(N_EPISODES, N_ITERATIONS_PER_EPISODE)
+    agent.train(N_EPISODES)
 
 
 if __name__ == "__main__":

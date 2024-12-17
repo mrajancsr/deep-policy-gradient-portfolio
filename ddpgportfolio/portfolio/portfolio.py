@@ -130,9 +130,26 @@ class Portfolio:
             portfolio weight at the beginning of previous period
             shape=(batch_size, m_noncash_assets)
         """
-        cash_weight = 1 - wt_prev.sum()
-        wt_prime = (yt * wt_prev) / (yt.dot(wt_prev) + cash_weight)
-        return wt_prime
+        if wt_prev.dim() == 1:
+            cash = torch.ones(1)
+            yt_with_cash = torch.concat([cash, yt], dim=-1)
+            cash_weight = 1 - wt_prev.sum()
+            wt_prev_with_cash = torch.concat(
+                [cash_weight.unsqueeze(-1), wt_prev], dim=-1
+            )
+            wt_prime = (yt_with_cash * wt_prev_with_cash) / (
+                yt_with_cash.dot(wt_prev_with_cash)
+            )
+            return wt_prime[1:]
+        batch_size = yt.shape[0]
+        cash = torch.ones((batch_size, 1))
+        yt_with_cash = torch.concat([cash, yt], dim=1)
+        cash_weight = 1 - wt_prev.sum(dim=1)
+        wt_prev_with_cash = torch.concat([cash_weight.unsqueeze(-1), wt_prev], dim=1)
+        wt_prime = (yt_with_cash * wt_prev_with_cash) / (
+            (yt_with_cash * wt_prev_with_cash).sum(dim=1).unsqueeze(-1)
+        )
+        return wt_prime[:, 1:]
 
     def get_transacton_remainder_factor(
         self,
@@ -167,21 +184,35 @@ class Portfolio:
         wt_prime = self.get_end_of_period_weights(yt, wt_prev)
 
         # get end of period cash position for each example in batch
-        wt_cash_prime = 1 - wt_prime.sum()
+        if wt_prime.dim() == 1:
+            wt_cash_prime = 1 - wt_prime.sum()
+            # get cash position for portfolio weight at period t+1
+            wt_cash = 1 - wt.sum()
+            # initial transaction remainder factor
+            ut_k = comission_rate * torch.abs(wt - wt_prime).sum()
+            c = comission_rate
+            for _ in range(n_iter):
+                update_term = torch.relu(wt_prime - ut_k * wt).sum()
+                ut_k = (
+                    1
+                    / (1 - c * wt_cash)
+                    * (1 - c * wt_cash_prime - c * (2 - c) * update_term)
+                )
+        else:
+            wt_cash_prime = 1 - wt_prime.sum(dim=1)
+            # get cash position for portfolio weight at period t+1
+            wt_cash = 1 - wt.sum(dim=1)
 
-        # get cash position for portfolio weight at period t+1
-        wt_cash = 1 - wt.sum()
-
-        # initial transaction remainder factor
-        ut_k = comission_rate * torch.abs(wt - wt_prime).sum()
-        c = comission_rate
-        for _ in range(n_iter):
-            update_term = torch.relu(wt_prime - ut_k * wt).sum()
-            ut_k = (
-                1
-                / (1 - c * wt_cash)
-                * (1 - c * wt_cash_prime - c * (2 - c) * update_term)
-            )
+            # initial transaction remainder factor
+            ut_k = comission_rate * torch.abs(wt - wt_prime).sum(dim=1)
+            c = comission_rate
+            for _ in range(n_iter):
+                update_term = torch.relu(wt_prime - ut_k.unsqueeze(1) * wt).sum(dim=1)
+                ut_k = (
+                    1
+                    / (1 - c * wt_cash)
+                    * (1 - c * wt_cash_prime - c * (2 - c) * update_term)
+                )
         return ut_k
 
     def get_reward(
@@ -204,34 +235,31 @@ class Portfolio:
             portfolio vector weight for beginning of period t
         """
         rf_period = risk_free_rate / self.get_annualization_factor()
-        # Risk penalty (volatility or large weight changes)
-        weight_change_penalty = torch.sum(
-            torch.abs(wt - wt_prev), dim=-1
-        )  # penalize large changes in portfolio weights
-        # Compute transaction cost penalty: this is based on the change in portfolio weights
-        transaction_penalty = 0.0005 * weight_change_penalty
         ut = self.get_transacton_remainder_factor(wt, yt, wt_prev)
 
+        # fix dimension
+        if wt.dim() == 1:
+            dim = -1
+            cash = torch.ones(1)
+        else:
+            dim = 1
+            batch_size = wt.shape[0]
+            cash = torch.ones((batch_size, 1))
         # get cash weight
-        wt_prev_cash = 1 - wt_prev.sum(dim=-1, keepdim=True)
+        wt_prev_cash = 1 - wt_prev.sum(dim=dim)
         # portfolio return before transaction cost
 
-        yt_with_cash = torch.concat(
-            [torch.tensor(1 + rf_period).unsqueeze(0), yt], dim=-1
-        )
-        wt_prev_with_cash = torch.concat([wt_prev_cash, wt_prev], dim=-1)
-        portfolio_return = yt_with_cash.dot(wt_prev_with_cash)
+        yt_with_cash = torch.concat([cash + rf_period, yt], dim=dim)
+
+        wt_prev_with_cash = torch.concat([wt_prev_cash.unsqueeze(-1), wt_prev], dim=dim)
+
+        portfolio_return = (yt_with_cash * wt_prev_with_cash).sum(dim=dim)
         portfolio_return_with_trxn_costs = ut * portfolio_return
 
         # Avoid log(0) or negative values by adding a small epsilon
         epsilon = 1e-6
-        assert portfolio_return_with_trxn_costs > 0, "portfolio return is not positive"
-        reward = torch.log(portfolio_return_with_trxn_costs + epsilon)
 
-        # Shaped reward (reward + penalties)
-        shaped_reward = (
-            reward - 0.01 * weight_change_penalty - 0.001 * transaction_penalty
-        )  # tune the penalties
+        reward = torch.log(portfolio_return_with_trxn_costs + epsilon)
 
         return reward
 

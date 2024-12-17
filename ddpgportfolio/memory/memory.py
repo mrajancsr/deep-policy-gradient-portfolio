@@ -220,3 +220,94 @@ class PrioritizedReplayMemory:
         ):
             combined_priority = self.alpha * priority + (1 - self.alpha) * recency
             self.priorities[idx] = max(combined_priority.item(), self.min_priority)
+
+
+class OSBLSampler:
+    def __init__(self, buffer_size=10000, batch_size=50, num_batches=10, beta=0.9):
+        """
+        Online Stochastic Batch Learning Trainer for managing data.
+
+        Args:
+            buffer_size (int): Maximum size of the training data buffer.
+            batch_size (int): Size of each mini-batch.
+            num_batches (int): Number of mini-batches to sample per training step.
+            beta (float): Decay rate for prioritizing recent data (0 < beta < 1).
+        """
+        self.buffer_size = buffer_size
+        self.batch_size = batch_size
+        self.num_batches = num_batches
+        self.beta = beta
+        self.buffer = deque(maxlen=buffer_size)  # Training data buffer
+
+    def __len__(self):
+        return len(self.buffer)
+
+    def add(self, experience: Experience):
+        """
+        Add pre-training data to the buffer.
+
+        Args:
+            dataset (list or iterable): Pre-training dataset, each item being (state, action, reward).
+        """
+        self.buffer.append(experience)
+
+    def geometric_sampling_probs(self, t, buffer_size, beta=5e-5, batch_size=50):
+        """
+        Compute geometric distribution probabilities for batch selection.
+
+        Args:
+            t (int): Current time step.
+            buffer_size (int): Size of the buffer.
+            beta (float): Success probability (similar to decay rate in geometric decay).
+            batch_size (int): Mini-batch size.
+
+        Returns:
+            np.array: Sampling probabilities for each valid batch.
+        """
+        valid_starts = np.arange(buffer_size - batch_size)
+        k = t - valid_starts - batch_size  # Temporal distance
+
+        # Compute geometric probabilities
+        log_probs = k * np.log(1 - beta) + np.log(beta)
+
+        # Normalize in the log domain to prevent overflow
+        log_probs -= np.max(
+            log_probs
+        )  # Subtract max log-probability for numerical stability
+        probs = np.exp(log_probs)  # Convert back to probabilities
+        probs /= probs.sum()  # Normalize to sum to 1
+
+    def sample_mini_batches(self, t):
+        """
+        Sample mini-batches using geometric sampling.
+
+        Args:
+            t (int): Current time step.
+
+        Returns:
+            list: List of sampled mini-batches.
+        """
+        buffer_size = len(self.buffer)
+        if buffer_size < self.batch_size:
+            raise ValueError("Not enough data in the buffer to sample a batch.")
+
+        # Compute sampling probabilities
+        probs = self.geometric_sampling_probs(
+            t, buffer_size, beta=self.beta, batch_size=self.batch_size
+        )
+
+        # Randomly sample mini-batch starting indices
+        batch_starts = np.random.choice(
+            np.arange(buffer_size - self.batch_size),
+            size=self.num_batches,
+            p=probs,
+            replace=False,
+        )
+
+        # Extract mini-batches
+        mini_batches = []
+        for start in batch_starts:
+            batch = list(self.buffer)[start : start + self.batch_size]
+            mini_batches.append(batch)
+
+        return mini_batches
