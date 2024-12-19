@@ -360,7 +360,7 @@ class DDPGAgent:
             experience = Experience(
                 state, action, normalized_reward, next_state, prev_index
             )
-            self.replay_memory.add(experience=experience)
+            self.replay_memory.add(experience=experience, reward=normalized_reward)
         print("pretraining done")
 
         print(f"buffer size: {len(self.replay_memory)}")
@@ -424,7 +424,7 @@ class DDPGAgent:
 
                 # Update priorities in the replay buffer (for prioritized experience replay)
 
-                self.replay_memory.update_priorities(indices, td_error, 0.1)
+                self.replay_memory.update_priorities(indices, td_error)
 
                 # Update actor (deterministic policy gradient)
                 action, actor_loss = self.train_actor(experiences, is_weights)
