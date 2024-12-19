@@ -43,7 +43,7 @@ class ExperienceReplayMemory:
     buffer: deque = field(init=False)
 
     def __post_init__(self):
-        self.buffer = deque(maxlen=1000000)
+        self.buffer = deque(maxlen=20000)
 
     def __repr__(self):
         return ""
@@ -189,7 +189,7 @@ class PrioritizedReplayMemory:
             # Incorporate recency bias
             recency_bias = 1 - (indices / len(self.buffer))  # Recent: high, Old: low
             combined_priorities = (
-                recency_weight * recency_bias
+                recency_weight * torch.tensor(recency_bias, dtype=torch.float32)
                 + (1 - recency_weight) * td_error_priorities
             )
         else:
