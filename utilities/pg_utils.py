@@ -24,34 +24,44 @@ class OrnsteinUhlenbeckNoise:
         self.state = x + dx
         return torch.tensor(self.state, dtype=torch.float32, device=self.device)
 
-    def decay_sigma(self, decay_rate=0.99, min_sigma=0.05):
+    def decay_sigma(self, decay_rate=0.995, min_sigma=0.05):
         self.sigma = max(self.sigma * decay_rate, min_sigma)
 
 
 class RewardNormalizer:
-    def __init__(self):
+    def __init__(self, alpha=None):
         self.mean = 0.0  # Running mean
         self.M2 = 0.0  # Sum of squared differences
         self.count = 0  # Number of rewards seen
+        self.alpha = alpha  # decay factor
 
     def update(self, reward):
         """
         Update the running statistics with a new reward.
         """
-        self.count += 1
-        delta = reward - self.mean
-        self.mean += delta / self.count
-        delta2 = reward - self.mean
-        self.M2 += delta * delta2
+        if self.alpha:  # Use EWMA if alpha is specified
+            self.mean = self.mean * (1 - self.alpha) + self.alpha * reward
+            self.M2 = self.M2 * (1 - self.alpha) + self.alpha * (
+                (reward - self.mean) ** 2
+            )
+        else:  # Use Welford's algorithm for running mean/variance
+            self.count += 1
+            delta = reward - self.mean
+            self.mean += delta / self.count
+            delta2 = reward - self.mean
+            self.M2 += delta * delta2
 
     def get_stats(self):
         """
         Get the current mean and standard deviation.
         """
-        if self.count < 2:
-            return self.mean, float("inf")  # Std is undefined for count < 2
-        variance = self.M2 / self.count
-        std = variance**0.5
+        if self.alpha:  # Variance approximation for EWMA
+            variance = self.M2
+        else:  # Variance calculation for Welford's algorithm
+            if self.count < 2:
+                return self.mean, float("inf")
+            variance = self.M2 / self.count
+        std = max(variance**0.5, 1e-5)  # Avoid division by zero
         return self.mean, std
 
     def normalize(self, reward):
@@ -59,8 +69,6 @@ class RewardNormalizer:
         Normalize a new reward using the current mean and standard deviation.
         """
         mean, std = self.get_stats()
-        if std == float("inf") or std == 0:  # Handle edge case for very few rewards
-            return reward
         return (reward - mean) / std
 
 

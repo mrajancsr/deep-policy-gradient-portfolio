@@ -189,31 +189,25 @@ class Portfolio:
         """
         rf_period = risk_free_rate / self.get_annualization_factor()
         # Risk penalty (volatility or large weight changes)
-        weight_change_penalty = torch.sum(
-            torch.abs(wt - wt_prev), dim=-1
-        )  # penalize large changes in portfolio weights
-        # Compute transaction cost penalty: this is based on the change in portfolio weights
-        transaction_penalty = 0.0005 * weight_change_penalty
-        ut = self.get_transacton_remainder_factor(wt, yt, wt_prev)
 
-        # get cash weight
-        wt_prev_cash = 1 - wt_prev.sum(dim=-1, keepdim=True)
+        # ut = self.get_transacton_remainder_factor(wt, yt, wt_prev)
         # portfolio return before transaction cost
 
         yt_with_cash = torch.concat(
             [torch.tensor(1 + rf_period).unsqueeze(0), yt], dim=-1
         )
-        wt_prev_with_cash = torch.concat([wt_prev_cash, wt_prev], dim=-1)
-        portfolio_return = yt_with_cash.dot(wt_prev_with_cash)
+
+        portfolio_return = yt_with_cash.dot(wt_prev)
 
         # Avoid log(0) or negative values by adding a small epsilon
         epsilon = 1e-6
-        reward = torch.log(ut * portfolio_return + epsilon)
+        reward = torch.log(portfolio_return + epsilon)
         relative_penalty = portfolio_return.abs().mean() + 1e-6
 
-        # Shaped reward (reward + penalties)
-        shaped_reward = (
-            reward - 0.01 * weight_change_penalty - 0.001 * transaction_penalty
-        )  # tune the penalties
+        # profitability incentive
+        alignment_incentive = torch.sum(wt_prev * torch.relu(yt_with_cash - 1))
+        alpha = 0.3
+        return reward + alpha * alignment_incentive
 
-        return shaped_reward
+    def update_portfolio_value(self, previous_portfolio_value, reward: torch.tensor):
+        return previous_portfolio_value * torch.exp(reward)

@@ -71,7 +71,11 @@ class Actor(nn.Module):
             action or current weights at time t
         """
         price_tensor, prev_weights = state
+        assert not torch.any(torch.isnan(prev_weights)), "NaN in weights!"
+        assert not torch.any(torch.isnan(price_tensor)), "NaN prices!"
         x = self.conv_layer(price_tensor)
+
+        assert not torch.any(torch.isnan(x)), "NaN convolution!"
 
         # get the dimension
         ndim = price_tensor.dim()

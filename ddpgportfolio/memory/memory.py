@@ -78,7 +78,7 @@ class Experience:
 @dataclass
 class PrioritizedReplayMemory:
     capacity: int
-    alpha: float = 0.6  # Controls prioritization (0: uniform, 1: fully prioritized)
+    alpha: float = 1.0  # Controls prioritization (0: uniform, 1: fully prioritized)
     beta: float = 0.4  # Importance-sampling bias correction
     epsilon: float = 1e-5  # Avoid zero priority
     beta_decay_rate: float = 0.01  # Rate of beta increment
