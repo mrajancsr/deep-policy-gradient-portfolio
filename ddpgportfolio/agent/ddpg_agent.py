@@ -1,8 +1,6 @@
-import logging
 from dataclasses import dataclass, field
 from typing import Optional, Tuple, Union
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -36,7 +34,6 @@ class DDPGAgent:
     batch_size: int
     window_size: int
     step_size: int
-    n_iter: int
     learning_rate: Optional[float] = 3e-5
     betas: Optional[Tuple[float, float]] = (0.0, 0.9)
     device: Optional[str] = "mps"
@@ -46,13 +43,12 @@ class DDPGAgent:
     target_critic: nn.Module = field(init=False)
     actor_optimizer: torch.optim = field(init=False)
     critic_optimizer: torch.optim = field(init=False)
-    loss_fn: nn.modules.loss.MSELoss = field(init=False)
     dataloader: DataLoader = field(init=False)
     pvm: PortfolioVectorMemory = field(init=False)
     replay_memory: PrioritizedReplayMemory = field(init=False)
     ou_noise: OrnsteinUhlenbeckNoise = field(init=False)
 
-    gamma: float = 0.3
+    gamma: float = 0.5
     tau: float = 0.05
     epsilon: float = 1.0
     epsilon_max: float = 1.0
@@ -94,21 +90,19 @@ class DDPGAgent:
         self.target_actor.to(self.device)
         self.target_critic.to(self.device)
 
-        # loss function for the critic
-        self.loss_fn = nn.MSELoss()
-
         # ou noise initialization
         self.ou_noise = OrnsteinUhlenbeckNoise(size=m_assets, theta=0.20, sigma=0.4)
 
-        # initializing pvm with all cash initially
+        # initializing pvm
         self.pvm = PortfolioVectorMemory(self.portfolio.n_samples, m_noncash_assets)
-        self.pvm.update_memory_stack(
-            torch.zeros(m_noncash_assets), self.window_size - 2
-        )
+
         self.replay_memory = PrioritizedReplayMemory(
             capacity=20000,
         )
         self.update_target_networks()
+
+        self.actor.train()
+        self.critic.train()
 
     def clone_network(self, network):
         cloned_network = type(network)()
@@ -139,36 +133,30 @@ class DDPGAgent:
         _type_
             _description_
         """
-        # self.actor.eval()
-        self.actor.train()
-
         with torch.no_grad():
             action_logits = self.actor(state)
+            actions = torch.softmax(action_logits.view(-1), dim=-1)
         if exploration:
             if action_type == "hybrid":
                 if self.episode_count < self.warmup_steps:
-                    action = self.select_random_action(self.portfolio.m_assets)
+                    random_action = self.select_random_action(self.portfolio.m_assets)
                     self.episode_count += 1
-                    return action[1:]
+                    return random_action, actions
                 else:
                     # transition to ou noise after warm up steps
                     action_type = "ou"
+
             if action_type == "ou":
                 noise = self.ou_noise.sample()
                 noisy_logits = action_logits + noise
-                # noisy_action = noisy_daction.clamp(min=0.01, max=1.0).view(-1)
-                # noisy_action = noisy_action / noisy_action.sum()
-
-                # self.ou_noise.decay_sigma()
-
-                return torch.softmax(noisy_logits.view(-1), dim=-1), torch.softmax(
-                    action_logits.view(-1), dim=-1
-                )
+                noisy_actions = torch.softmax(noisy_logits.view(-1), dim=-1)
+                return noisy_actions, actions
 
             elif action_type == "greedy" and np.random.rand() < self.epsilon:
-                action = self.select_random_action(self.portfolio.m_assets)
+                random_actions = self.select_random_action(self.portfolio.m_assets)
                 self.update_epsilon()
-                return action[1:]
+                return random_actions, actions
+        return actions
 
     def update_epsilon(self):
         if self.episode_count < self.warmup_steps:
@@ -230,19 +218,20 @@ class DDPGAgent:
         self.actor_optimizer.zero_grad()
         xt, previous_action = experience.state
         state = (xt, previous_action[:, 1:])
-        predicted_actions = torch.softmax(self.actor(state), dim=-1)
+        action_logits = self.actor(state)
+        predicted_actions = torch.softmax(action_logits, dim=-1)
 
         # actor has to choose action that maximizes the q value
         # hence we compute the q value and maximize this value
         q_values = self.critic(experience.state, predicted_actions)
         actor_loss = -q_values.mean()
         actor_loss = (actor_loss * is_weights).mean()
-        # perform backprop
 
+        # perform backprop
         actor_loss.backward()
         # torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
         self.actor_optimizer.step()
-        return predicted_actions, actor_loss.item()
+        return actor_loss.item()
 
     def _normalize_batch_rewards(self, rewards):
         mean = rewards.mean()
@@ -268,17 +257,16 @@ class DDPGAgent:
         """
         self.critic.train()
         self.critic_optimizer.zero_grad()
-        # critic needs to evaluate good an action is in a state
-        # hence we need to add the cash weight back otherwise its biased
+
         xt, previous_action = experience.state
         reward = experience.reward
         # construct st = (Xt, wt-1)
         state = (xt, previous_action)
 
         # we need to do the same for action wt at time t
-        actions = experience.action
+        noisy_actions = experience.action
         # q(st, at)
-        predicted_q_values = self.critic(state, actions)
+        predicted_q_values = self.critic(state, noisy_actions)
 
         with torch.no_grad():
             # the target actor uses next state from replay buffer
@@ -309,7 +297,7 @@ class DDPGAgent:
         self.critic_optimizer.step()
         return td_error, critic_loss.item()
 
-    def train(self, num_episodes: int = 2):
+    def train(self, num_episodes: int = 2, action_type: str = "ou"):
         """Train the agent by training the actor and critic networks
 
         Parameters
@@ -360,19 +348,26 @@ class DDPGAgent:
             self.pvm = PortfolioVectorMemory(
                 self.portfolio.n_samples, self.portfolio.m_assets
             )
+
+            all_cash = torch.zeros(self.portfolio.m_assets)
+            all_cash[0] = 1.0
+            self.pvm.update_memory_stack(all_cash, self.window_size - 2)
+
+            # reset noise parameters
+            self.epsilon = 1.0
             self.ou_noise.reset()
+            self.episode_count = 0
 
             # Loop over timesets in current episode
-
             for t in range(1, len(kraken_ds) + 49):
                 # get the price tensor from dataset and construct state
                 Xt, prev_index = kraken_ds[t - 1]
                 previous_action = self.pvm.get_memory_stack(prev_index)
                 state = (Xt, previous_action[1:])
 
-                # select action according to current policy and noise
+                # select actions by exploring using ou policy
                 noisy_action, action = self.select_action(
-                    state, exploration=True, action_type="ou"
+                    state, exploration=True, action_type=action_type
                 )
 
                 # execute action and compute rewards
@@ -415,7 +410,7 @@ class DDPGAgent:
                 td_error, critic_loss = self.train_critic(experiences, is_weights)
 
                 # Update actor (deterministic policy gradient)
-                actions, actor_loss = self.train_actor(experiences, is_weights)
+                actor_loss = self.train_actor(experiences, is_weights)
 
                 self.update_target_networks()
 
