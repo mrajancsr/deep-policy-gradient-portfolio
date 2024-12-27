@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import pickle
-import sys
 from dataclasses import dataclass, field
 from typing import Dict, Iterator, List
 
@@ -31,40 +30,28 @@ class Portfolio:
 
     asset_names: List[str]
     start_date: str
-    end_date: str
     __prices: Dict[str, pd.DataFrame] = field(init=False, default_factory=lambda: {})
     __assets: Dict[str, Asset] = field(init=False)
     __initial_port: float = 10000
     m_assets: int = field(init=False, default=0)
     m_noncash_assets: int = field(init=False, default=0)
     __annualization_factor: int = field(init=False, default=365 * 48)
-    portfolio_values: List[float] = field(init=False)
 
     def __post_init__(self):
         self._load_pickle_object()
         self.__assets = {
             asset_name: Asset(
                 name=asset_name,
-                open_price=self.__prices["open"][asset_name].loc[
-                    self.start_date : self.end_date,
-                ],
-                close_price=self.__prices["close"][asset_name].loc[
-                    self.start_date : self.end_date,
-                ],
-                high_price=self.__prices["high"][asset_name].loc[
-                    self.start_date : self.end_date,
-                ],
-                low_price=self.__prices["low"][asset_name].loc[
-                    self.start_date : self.end_date,
-                ],
+                open_price=self.__prices["open"][asset_name].loc[self.start_date :,],
+                close_price=self.__prices["close"][asset_name].loc[self.start_date :],
+                high_price=self.__prices["high"][asset_name].loc[self.start_date :],
+                low_price=self.__prices["low"][asset_name].loc[self.start_date :],
             )
             for asset_name in self.asset_names
         }
         self.m_assets = len(self.__assets)
         self.m_noncash_assets = self.m_assets - 1
-        self.n_samples = (
-            self.__prices["close"].loc[self.start_date : self.end_date,].shape[0]
-        )
+        self.n_samples = self.__prices["close"].loc[self.start_date :,].shape[0]
 
     def get_annualization_factor(self):
         return self.__annualization_factor
@@ -82,9 +69,6 @@ class Portfolio:
 
     def get_initial_portfolio_value(self):
         return self.__initial_port
-
-    def set_portfolio_values(self, portfolio_values: List[float]):
-        self.portfolio_values = portfolio_values
 
     def get_asset(self, name: str) -> Asset:
         """Returns the asset in the portfolio given the name of the asset
@@ -105,16 +89,16 @@ class Portfolio:
         yield from self.__assets.values()
 
     def get_relative_price(self):
-        return self.__prices["relative_price"].loc[self.start_date : self.end_date,]
+        return self.__prices["relative_price"].loc[self.start_date :]
 
     def get_close_price(self):
-        return self.__prices["close"].loc[self.start_date : self.end_date,]
+        return self.__prices["close"].loc[self.start_date :]
 
     def get_high_price(self):
-        return self.__prices["high"].loc[self.start_date : self.end_date,]
+        return self.__prices["high"].loc[self.start_date :]
 
     def get_low_price(self):
-        return self.__prices["low"].loc[self.start_date : self.end_date,]
+        return self.__prices["low"].loc[self.start_date :]
 
     def get_end_of_period_weights(self, yt: torch.tensor, wt_prev: torch.tensor):
         """Computes the wt' which is portfolio weight at the end of period t
@@ -130,8 +114,7 @@ class Portfolio:
             portfolio weight at the beginning of previous period
             shape=(batch_size, m_noncash_assets)
         """
-        cash_weight = 1 - wt_prev.sum()
-        wt_prime = (yt * wt_prev) / (yt.dot(wt_prev) + cash_weight)
+        wt_prime = (yt * wt_prev) / (yt.dot(wt_prev) + 1e-5)
         return wt_prime
 
     def get_transacton_remainder_factor(
@@ -167,16 +150,16 @@ class Portfolio:
         wt_prime = self.get_end_of_period_weights(yt, wt_prev)
 
         # get end of period cash position for each example in batch
-        wt_cash_prime = 1 - wt_prime.sum()
+        wt_cash_prime = wt_prime[0]
 
         # get cash position for portfolio weight at period t+1
-        wt_cash = 1 - wt.sum()
+        wt_cash = wt[0]
 
         # initial transaction remainder factor
-        ut_k = comission_rate * torch.abs(wt - wt_prime).sum()
+        ut_k = comission_rate * torch.abs(wt[1:] - wt_prime[1:]).sum()
         c = comission_rate
         for _ in range(n_iter):
-            update_term = torch.relu(wt_prime - ut_k * wt).sum()
+            update_term = torch.relu(wt_prime[1:] - ut_k * wt[1:]).sum()
             ut_k = (
                 1
                 / (1 - c * wt_cash)
@@ -190,6 +173,8 @@ class Portfolio:
         yt: torch.tensor,
         wt_prev: torch.tensor,
         risk_free_rate: float = 0.0425,
+        beta: float = 0.0018,
+        alpha: float = 0.2,
     ):
         """returns the immediate reward to the agent given by 11 and mentioned on pg 11
         given by rt = ln(ut*yt . w(t-1)) / batch_size
@@ -205,35 +190,31 @@ class Portfolio:
         """
         rf_period = risk_free_rate / self.get_annualization_factor()
         # Risk penalty (volatility or large weight changes)
-        weight_change_penalty = torch.sum(
-            torch.abs(wt - wt_prev), dim=-1
-        )  # penalize large changes in portfolio weights
-        # Compute transaction cost penalty: this is based on the change in portfolio weights
-        transaction_penalty = 0.0005 * weight_change_penalty
-        ut = self.get_transacton_remainder_factor(wt, yt, wt_prev)
-
-        # get cash weight
-        wt_prev_cash = 1 - wt_prev.sum(dim=-1, keepdim=True)
-        # portfolio return before transaction cost
 
         yt_with_cash = torch.concat(
             [torch.tensor(1 + rf_period).unsqueeze(0), yt], dim=-1
         )
-        wt_prev_with_cash = torch.concat([wt_prev_cash, wt_prev], dim=-1)
-        portfolio_return = yt_with_cash.dot(wt_prev_with_cash)
-        portfolio_return_with_trxn_costs = ut * portfolio_return
+
+        weight_change_penalty = torch.sum(
+            torch.abs(wt - wt_prev), dim=-1
+        )  # penalize large changes in portfolio weights
+
+        # Compute transaction cost penalty: this is based on the change in portfolio weights
+        transaction_penalty = beta * weight_change_penalty
+        ut = self.get_transacton_remainder_factor(wt, yt_with_cash, wt_prev)
+        # portfolio return before transaction cost
+
+        portfolio_return = yt_with_cash.dot(wt_prev)
 
         # Avoid log(0) or negative values by adding a small epsilon
         epsilon = 1e-6
-        assert portfolio_return_with_trxn_costs > 0, "portfolio return is not positive"
-        reward = torch.log(portfolio_return_with_trxn_costs + epsilon)
+        reward = torch.log(ut * portfolio_return + epsilon)
+        relative_penalty = portfolio_return.abs().mean() + 1e-6
 
-        # Shaped reward (reward + penalties)
-        shaped_reward = (
-            reward - 0.01 * weight_change_penalty - 0.001 * transaction_penalty
-        )  # tune the penalties
+        # profitability incentive
+        alignment_incentive = torch.sum(wt_prev * torch.relu(yt_with_cash - 1))
 
-        return reward
+        return reward + alpha * alignment_incentive - transaction_penalty
 
     def update_portfolio_value(self, previous_portfolio_value, reward: torch.tensor):
         return previous_portfolio_value * torch.exp(reward)

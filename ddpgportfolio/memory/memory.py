@@ -43,7 +43,7 @@ class ExperienceReplayMemory:
     buffer: deque = field(init=False)
 
     def __post_init__(self):
-        self.buffer = deque(maxlen=1000000)
+        self.buffer = deque(maxlen=20000)
 
     def __repr__(self):
         return ""
@@ -77,68 +77,64 @@ class Experience:
 
 @dataclass
 class PrioritizedReplayMemory:
-    """Implements the Prioritized Experience Replay of Schaul, Quan et al (2016)
-    https://arxiv.org/pdf/1511.05952
-    by prioritizing experiences with better rewards
-    """
-
     capacity: int
-    alpha: Optional[float] = 0.6
-    epsilon: Optional[float] = 1e-5
-    beta_decay_rate: Optional[float] = 0.01
-    alpha_decay_rate: Optional[float] = 0.001
-    min_priority: float = 0.1
-    device: Optional[str] = "mps"
-    buffer: List[Experience] = field(init=False, default_factory=lambda: [])
-    pos: int = field(init=False, default=0)
-    priorities: List[float] = field(init=False, default_factory=lambda: [])
-
-    def __repr__(self):
-        return f"Total Experiences: {len(self.buffer)}"
+    alpha: float = 1.0  # Controls prioritization (0: uniform, 1: fully prioritized)
+    beta: float = 0.4  # Importance-sampling bias correction
+    epsilon: float = 1e-5  # Avoid zero priority
+    beta_decay_rate: float = 0.01  # Rate of beta increment
+    alpha_decay_rate: float = 0.001  # Rate of alpha decrement
+    min_priority: float = 0.1  # Minimum allowable priority
+    device: str = "mps"  # Device for tensor operations
+    buffer: List = field(default_factory=list)
+    priorities: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    position: int = 0
 
     def __len__(self):
         return len(self.buffer)
 
-    def peek_buffer(self):
-        return self.buffer[-1]
-
-    def peek_priorities(self):
-        return self.priorities[-1]
-
-    def add(self, experience: Experience, reward: float):
-        """_summary_
-
-        Parameters
-        ----------
-        experience : Experience
-            _description_
-        reward : torch.tensor
-            _description_
+    def add(self, experience: Tuple, initial_td_error: Optional[float] = None):
         """
-        priority = abs(reward) + self.epsilon
-
-        if len(self.buffer) < self.capacity:
-            # add experiencs and their priority
-            self.buffer.append(experience)
-            self.priorities.append(priority)
+        Adds an experience to the buffer, initializing its priority based on TD error or default.
+        """
+        # Compute initial priority based on TD error or use max priority
+        # Compute initial priority
+        if initial_td_error is not None:
+            priority = abs(initial_td_error) + self.epsilon
         else:
-            # overwrite experience at position pos
-            self.buffer[self.pos] = experience
-            self.priorities[self.pos] = priority
+            priority = max(
+                self.priorities.max() if len(self.priorities) > 0 else 1.0, 1.0
+            )
 
-        self.priorities[self.pos] = max(priority, self.min_priority)
-        self.pos = (self.pos + 1) % self.capacity
+        # If buffer is not full, append experience and priority
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(experience)
+            if len(self.priorities) < self.capacity:
+                self.priorities = np.append(self.priorities, priority)
+        else:
+            # Replace the oldest experience and update priority
+            self.buffer[self.position] = experience
+            self.priorities[self.position] = priority
+
+        # Ensure priority meets minimum threshold
+        self.priorities[self.position] = max(priority, self.min_priority)
+        self.position = (self.position + 1) % self.capacity
 
     def sample(
-        self, batch_size, beta=0.4, p_recent=0.5
-    ) -> Tuple[Tuple[Experience, torch.tensor, np.ndarray]]:
+        self, batch_size: int, beta: Optional[float] = None
+    ) -> Tuple[List, np.ndarray, torch.Tensor]:
+        """
+        Samples a batch of experiences based on priorities, with importance-sampling weights.
+        """
+        beta = beta or self.beta
+        self.beta = min(
+            1.0, self.beta + self.beta_decay_rate
+        )  # Increment beta over time
 
-        # Decay alpha and beta over time
-        self.alpha = max(
-            0.1, self.alpha - self.alpha_decay_rate
-        )  # Ensure alpha doesn't go below 0.1
-        self.beta = min(1.0, beta + self.beta_decay_rate)  # Gradually increase beta
+        # Normalize priorities to get probabilities
+        scaled_priorities = self.priorities[: len(self.buffer)] ** self.alpha
+        sampling_probabilities = scaled_priorities / scaled_priorities.sum()
 
+<<<<<<< HEAD
         # Partition the buffer into recent and older sections
         recent_cutoff = int(len(self.buffer) * 0.4)  # Top 20% of the buffer is recent
         recent_indices = list(range(len(self.buffer) - recent_cutoff, len(self.buffer)))
@@ -168,11 +164,12 @@ class PrioritizedReplayMemory:
         combined_priorities = np.array(self.priorities)[indices]
         prob_combined = (
             combined_priorities**self.alpha / (combined_priorities**self.alpha).sum()
+=======
+        # Sample indices based on probabilities
+        indices = np.random.choice(
+            len(self.buffer), size=batch_size, p=sampling_probabilities
+>>>>>>> ddpg_change
         )
-        weights = (len(self.buffer) * prob_combined) ** -self.beta
-        weights /= weights.max()  # Normalize to avoid large weights
-
-        # Extract the actual experiences from the buffer using the indices
         experiences = [self.buffer[idx] for idx in indices]
 
         xt, prev_action, action, reward, xt_next, prev_index = zip(
@@ -199,24 +196,46 @@ class PrioritizedReplayMemory:
             (xt, prev_action), action, reward, (xt_next, action), prev_index
         )
 
-        weights = torch.tensor(
-            weights, dtype=torch.float32
-        )  # Convert weights to torch tensor
+        # Compute importance-sampling weights
+        weights = (len(self.buffer) * sampling_probabilities[indices]) ** -beta
+        weights /= weights.max()  # Normalize for numerical stability
+
+        # Convert weights to tensor
+        weights = torch.tensor(weights, dtype=torch.float32, device=self.device)
 
         return experience, indices, weights
 
-    def update_priorities(self, indices, td_errors):
-        # Ensure priorities are non-negative and account for epsilon to avoid zero priority
-        td_error_priorities = td_errors.abs() + self.epsilon
+    def update_priorities(
+        self,
+        indices: np.ndarray,
+        td_errors: torch.tensor,
+        recency_weight: Optional[float] = None,
+    ):
+        """
+        Updates the priorities of sampled experiences based on TD errors and optionally recency bias.
+        """
+        assert not torch.any(torch.isnan(td_errors)), "NaN in TD errors!"
+        assert not np.any(indices >= len(self.buffer)), "Indices out of range!"
 
-        # Normalize recency bias
-        recency_bias = 1 - (
-            np.array(indices) / len(self.buffer)
-        )  # Most recent = 1, oldest = 0
+        # Calculate new priorities
+        td_error_priorities = (abs(td_errors) + self.epsilon).flatten()
 
-        # Weight TD errors and recency bias
-        for idx, (priority, recency) in zip(
-            indices, zip(td_error_priorities, recency_bias)
-        ):
-            combined_priority = self.alpha * priority + (1 - self.alpha) * recency
-            self.priorities[idx] = max(combined_priority.item(), self.min_priority)
+        if recency_weight is not None:
+            # Incorporate recency bias
+            recency_bias = 1 - (indices / len(self.buffer))  # Recent: high, Old: low
+            combined_priorities = (
+                recency_weight * torch.tensor(recency_bias, dtype=torch.float32)
+                + (1 - recency_weight) * td_error_priorities
+            )
+        else:
+            combined_priorities = td_error_priorities
+
+        # Update priorities in buffer, ensuring minimum threshold
+        for idx, priority in zip(indices, combined_priorities):
+            self.priorities[idx] = max(priority, self.min_priority)
+
+    def decay_alpha(self):
+        """
+        Gradually decreases alpha for smoother transitions over time.
+        """
+        self.alpha = max(0.1, self.alpha - self.alpha_decay_rate)

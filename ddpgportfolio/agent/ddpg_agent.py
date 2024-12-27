@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -36,7 +35,6 @@ class DDPGAgent:
     batch_size: int
     window_size: int
     step_size: int
-    n_iter: int
     learning_rate: Optional[float] = 3e-5
     betas: Optional[Tuple[float, float]] = (0.0, 0.9)
     device: Optional[str] = "mps"
@@ -46,20 +44,26 @@ class DDPGAgent:
     target_critic: nn.Module = field(init=False)
     actor_optimizer: torch.optim = field(init=False)
     critic_optimizer: torch.optim = field(init=False)
-    loss_fn: nn.modules.loss.MSELoss = field(init=False)
     dataloader: DataLoader = field(init=False)
     pvm: PortfolioVectorMemory = field(init=False)
     replay_memory: PrioritizedReplayMemory = field(init=False)
     ou_noise: OrnsteinUhlenbeckNoise = field(init=False)
 
-    gamma: float = 0.9
-    tau: float = 0.05
+    gamma: float = 0.7
+    tau: float = 0.01
     epsilon: float = 1.0
     epsilon_max: float = 1.0
     epsilon_min: float = 0.01
     epsilon_decay_rate: float = 1e-5
     episode_count: int = 0
     warmup_steps: int = 6000
+<<<<<<< HEAD
+=======
+    min_buffer_warmup_steps: int = 5000
+    ou_params: Dict[str, float] = field(
+        default_factory=lambda: {"sigma": 0.4, "theta": 0.2}
+    )
+>>>>>>> ddpg_change
 
     def __post_init__(self):
         # create dataset and dataloaders for proper iteration
@@ -80,34 +84,45 @@ class DDPGAgent:
 
         self.actor_optimizer = torch.optim.Adam(
             self.actor.parameters(),
-            lr=1e-5,
+            lr=3e-5,
             weight_decay=1e-5,
         )
         self.critic_optimizer = torch.optim.Adam(
             self.critic.parameters(),
-            lr=1e-5,
+            lr=5e-5,
             weight_decay=1e-5,
         )
         self.actor.to(self.device)
         self.critic.to(self.device)
 
-        # loss function for the critic
-        self.loss_fn = nn.MSELoss()
-
         # ou noise initialization
+<<<<<<< HEAD
         self.ou_noise = OrnsteinUhlenbeckNoise(size=m_assets, theta=0.20, sigma=0.5)
+=======
+        theta = self.ou_params["theta"]
+        sigma = self.ou_params["sigma"]
+        self.ou_noise = OrnsteinUhlenbeckNoise(size=m_assets, theta=theta, sigma=sigma)
+>>>>>>> ddpg_change
 
-        # initializing pvm with all cash initially
+        # initializing pvm
         self.pvm = PortfolioVectorMemory(self.portfolio.n_samples, m_noncash_assets)
-        self.pvm.update_memory_stack(
-            torch.zeros(m_noncash_assets), self.window_size - 2
-        )
+
         self.replay_memory = PrioritizedReplayMemory(
             capacity=20000,
         )
 
+<<<<<<< HEAD
     def select_uniform_action(self, m):
         uniform_vec = np.random.uniform(0, 1, size=m)
+=======
+    def clone_network(self, network):
+        cloned_network = type(network)()
+        cloned_network.load_state_dict(network.state_dict())
+        return cloned_network
+
+    def select_random_action(self, m):
+        uniform_vec = np.random.rand(m)
+>>>>>>> ddpg_change
         return torch.tensor(uniform_vec / np.sum(uniform_vec), dtype=torch.float32)
 
     def select_action(
@@ -121,34 +136,46 @@ class DDPGAgent:
         Parameters
         ----------
         state : Tuple[torch.tensor, torch.tensor]
-            _description_
+            contains (Xt, wt-1)
         exploration : bool, optional
-            _description_, by default False
+            whether to explore with agent, by default False
 
         Returns
         -------
-        _type_
-            _description_
+        if no exploration, returns deterministic_actions
+        otherwise, returns (noise, deterministic_actions)
         """
-        self.actor.eval()
-
         with torch.no_grad():
+            self.actor.eval()
             action_logits = self.actor(state)
+            actions = torch.softmax(action_logits.view(-1), dim=-1)
         if exploration:
             if action_type == "hybrid":
                 if self.episode_count < self.warmup_steps:
+<<<<<<< HEAD
                     action = self.select_uniform_action(self.portfolio.m_assets)
                     self.episode_count += 1
                     return action[1:]
                 else:
                     # transition to ou noise after warm up steps
                     action_type = "ou"
+=======
+                    random_action = self.select_random_action(self.portfolio.m_assets)
+                    self.episode_count += 1
+                    return random_action, actions
+                else:
+                    # transition to ou noise after warm up steps
+                    action_type = "ou"
+
+>>>>>>> ddpg_change
             if action_type == "ou":
                 noise = self.ou_noise.sample()
-                action_logits += noise
-                self.ou_noise.decay_sigma()
+                noisy_logits = action_logits + noise
+                noisy_actions = torch.softmax(noisy_logits.view(-1), dim=-1)
+                return noisy_actions, actions
 
             elif action_type == "greedy" and np.random.rand() < self.epsilon:
+<<<<<<< HEAD
                 action = self.get_uniform_action(self.portfolio.m_assets)
                 self.update_epsilon()
                 return action[1:]
@@ -157,6 +184,12 @@ class DDPGAgent:
 
         # return all non-cash weights
         return action[1:]
+=======
+                random_actions = self.select_random_action(self.portfolio.m_assets)
+                self.update_epsilon()
+                return random_actions, actions
+        return actions
+>>>>>>> ddpg_change
 
     def update_epsilon(self):
         if self.episode_count < self.warmup_steps:
@@ -182,14 +215,14 @@ class DDPGAgent:
     def soft_update(
         self, target_network: nn.Module, main_network: nn.Module, tau: float
     ):
-        """_summary_
+        """Peroforms a softupdate of target networks using ewma
 
         Parameters
         ----------
         target_network : nn.Module
-            _description_
+            one of actor or critic
         main_network : nn.Module
-            _description_
+           one of actor or critic
         tau : float
             _description_
         """
@@ -217,28 +250,29 @@ class DDPGAgent:
         _type_
             _description_
         """
+        self.actor.train()
         self.actor_optimizer.zero_grad()
-        logits = self.actor(experience.state)
-        predicted_actions = torch.softmax(logits, dim=1)
-        xt, previous_noncash_actions = experience.state
-        cash_weight_previous = 1 - previous_noncash_actions.sum(dim=1)
-        previous_action = torch.cat(
-            [cash_weight_previous.unsqueeze(1), previous_noncash_actions], dim=1
-        )
-        state = (xt, previous_action)
+        xt, previous_action = experience.state
+        state = (xt, previous_action[:, 1:])
+        action_logits = self.actor(state)
+        predicted_actions = torch.softmax(action_logits, dim=-1)
 
         # actor has to choose action that maximizes the q value
         # hence we compute the q value and maximize this value
+<<<<<<< HEAD
         q_values = self.critic(state, predicted_actions)
         entropy = compute_entropy(predicted_actions)
+=======
+        q_values = self.critic(experience.state, predicted_actions)
+>>>>>>> ddpg_change
         actor_loss = -q_values.mean()
         actor_loss = (actor_loss * is_weights).mean()
-        # perform backprop
 
+        # perform backprop
         actor_loss.backward()
         # torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
         self.actor_optimizer.step()
-        return predicted_actions[:, 1:], actor_loss.item()
+        return actor_loss.item()
 
     def _normalize_batch_rewards(self, rewards):
         mean = rewards.mean()
@@ -259,31 +293,42 @@ class DDPGAgent:
 
         Returns
         -------
-        _type_
-            _description_
+        Tuple[torch.tensor, float]
+            (td error, critic loss)
         """
+        self.critic.train()
         self.critic_optimizer.zero_grad()
-        # critic needs to evaluate good an action is in a state
-        # hence we need to add the cash weight back otherwise its biased
-        xt, previous_noncash_actions = experience.state
-        reward = experience.reward
-        cash_weight_previous = 1 - previous_noncash_actions.sum(dim=1)
 
-        # previous action includes cash weight now
-        previous_action = torch.cat(
-            [cash_weight_previous.unsqueeze(1), previous_noncash_actions], dim=1
-        )
+        xt, previous_action = experience.state
+        reward = experience.reward
         # construct st = (Xt, wt-1)
         state = (xt, previous_action)
 
         # we need to do the same for action wt at time t
-        noncash_actions = experience.action
-        cash_weight_action = 1 - noncash_actions.sum(dim=1)
-        actions = torch.cat([cash_weight_action.unsqueeze(1), noncash_actions], dim=1)
-        predicted_q_values = self.critic(state, actions)
+        noisy_actions = experience.action
+        # q(st, at)
+        predicted_q_values = self.critic(state, noisy_actions)
 
+<<<<<<< HEAD
         # calculate target q values using bellman equation
         td_target = reward / self.batch_size
+=======
+        with torch.no_grad():
+            # the target actor uses next state from replay buffer
+            xt_next, prev_action_next = experience.next_state
+            # remove cash from action and reconstruct the state
+            next_state = (xt_next, prev_action_next[:, 1:])
+            # the actor only takes non cash assets as input
+            next_target_logits = self.target_actor(next_state)
+            next_target_action = torch.softmax(next_target_logits, dim=1)
+            # q(st+1, at+1)
+            target_q_values = self.target_critic(
+                experience.next_state, next_target_action
+            )
+
+            # calculate target q values using bellman equation
+            td_target = reward + self.gamma * target_q_values
+>>>>>>> ddpg_change
 
         # compute the critic loss using MSE between predicted Q-values and target Q-values
         # Hence we are minimizing the TD Error
@@ -291,11 +336,14 @@ class DDPGAgent:
         critic_loss = torch.mean(td_error**2)
         critic_loss = (critic_loss * is_weights).mean()
 
+        assert not torch.any(torch.isnan(td_error)), "NaN in TD error!"
+
         critic_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=1.0)
         self.critic_optimizer.step()
         return td_error, critic_loss.item()
 
+<<<<<<< HEAD
     def warm_up_critic(self, n_iterations: int = 100):
         """Warm-up the critic network using the replay buffer before training the actor.
 
@@ -367,6 +415,9 @@ class DDPGAgent:
         # self.warm_up_critic(n_iterations=200)
 
     def train(self, n_episodes: int = 50, n_iterations_per_episode: int = 20):
+=======
+    def train(self, num_episodes: int = 2, action_type: str = "ou"):
+>>>>>>> ddpg_change
         """Train the agent by training the actor and critic networks
 
         Parameters
@@ -381,10 +432,9 @@ class DDPGAgent:
         Exception
             _description_
         """
-        if len(self.replay_memory) == 0:
-            raise Exception("replay memory is empty.  Please pre-train agent")
 
         print("Training Started for DDPG Agent")
+
         # scheduler to perform learning rate decay
         critic_scheduler = torch.optim.lr_scheduler.StepLR(
             self.critic_optimizer, step_size=100, gamma=0.9
@@ -392,64 +442,148 @@ class DDPGAgent:
         actor_scheduler = torch.optim.lr_scheduler.StepLR(
             self.actor_optimizer, step_size=100, gamma=0.9
         )
-        # Training loop
-        batch_size = self.batch_size
 
+        # store the losses and rewards from updating actor and critic networks
         critic_losses = []
         actor_losses = []
         rewards = []
 
-        for episode in range(n_episodes):
+        # dataset to get the price tensor and previous weights
+        kraken_ds = KrakenDataSet(self.portfolio, self.window_size, self.step_size)
+        n_samples = len(kraken_ds) + 49
+
+        batch_size = self.batch_size
+
+        for episode in range(num_episodes):
+
             # Initialize accumulators for the losses
             episode_actor_loss = 0
             episode_critic_loss = 0
-            total_episodic_reward = 0
+            total_normalized_reward = 0
+            true_episodic_reward = 0
 
-            # Loop over iterations within the current episode
-            for iteration in range(n_iterations_per_episode):
-                # Sample a batch of experiences from the replay buffer
+            # initialize weights in pvm starting with cash only
+            self.pvm = PortfolioVectorMemory(
+                self.portfolio.n_samples, self.portfolio.m_assets
+            )
+            all_cash = torch.zeros(self.portfolio.m_assets)
+            all_cash[0] = 1.0
+            self.pvm.update_memory_stack(all_cash, self.window_size - 2)
+
+            # reset noise parameters
+            self.epsilon = 1.0
+            self.ou_noise.reset_sigma(episode)
+            print(f"episode {episode + 1} sigma: {self.ou_noise.sigma}")
+            self.episode_count = 0
+
+            # equity curve of agent
+            previous_portfolio_value = self.portfolio.get_initial_portfolio_value()
+            equity_curve = [previous_portfolio_value]
+
+            # normalizer to normalize rewards
+            reward_normalizer = RewardNormalizer()
+
+            # Loop over timesets in current episode
+            for t in range(1, n_samples):
+                # get the price tensor from dataset and construct state
+                Xt, prev_index = kraken_ds[t - 1]
+                previous_action = self.pvm.get_memory_stack(prev_index)
+                state = (Xt, previous_action[1:])
+
+                # select actions by exploring using ou policy
+                noisy_action, action = self.select_action(
+                    state, exploration=True, action_type=action_type
+                )
+
+                # decay sigma
+                dt = t / n_samples
+                self.ou_noise.decay_sigma(dt, 0.0003)
+
+                # execute action and compute rewards
+                # get the relative price vector from price tensor to calculate reward
+                yt = 1 / Xt[0, :, -2]
+                reward = self.portfolio.get_reward(action, yt, previous_action)
+                true_episodic_reward += reward.item()
+
+                # get current portfolio value
+                current_portfolio_value = self.portfolio.update_portfolio_value(
+                    previous_portfolio_value, reward
+                )
+                equity_curve.append(current_portfolio_value.item())
+                previous_portfolio_value = current_portfolio_value
+
+                # normalize the rewards
+                reward_normalizer.update(reward.item())
+                normalized_reward = reward_normalizer.normalize(reward.item())
+
+                # create state and next state
+                state = (Xt, previous_action)
+                Xt_next, _ = kraken_ds[t]
+                next_state = (Xt_next, action)
+
+                # construct transition to store into replay buffer
+                experience = Experience(
+                    state,
+                    noisy_action,
+                    normalized_reward,
+                    next_state,
+                    prev_index,
+                )
+
+                # update the portfolio vector memory with current action
+                self.pvm.update_memory_stack(action.detach(), prev_index + 1)
+
+                self.replay_memory.add(experience=experience)
+
+                if len(self.replay_memory) < self.min_buffer_warmup_steps:
+                    continue
+
+                # sample a random mini-batch from replay memory
                 experiences, indices, is_weights = self.replay_memory.sample(
                     batch_size=batch_size
                 )
 
-                # get the reward
-                reward = experiences.reward
                 # Update critic (TD Error)
                 td_error, critic_loss = self.train_critic(experiences, is_weights)
 
-                # Update priorities in the replay buffer (for prioritized experience replay)
-
-                self.replay_memory.update_priorities(indices, td_error)
-
                 # Update actor (deterministic policy gradient)
-                action, actor_loss = self.train_actor(experiences, is_weights)
-                self.pvm.update_memory_stack(
-                    action.detach(), experiences.previous_index + 1
-                )
+                actor_loss = self.train_actor(experiences, is_weights)
+
+                if t % 50 == 0:
+                    self.update_target_networks()
+
+                # Update priorities in the replay buffer (for prioritized experience replay)
+                self.replay_memory.update_priorities(indices, td_error, 0.3)
 
                 # Accumulate the losses over the iterations for logging
                 episode_actor_loss += actor_loss
                 episode_critic_loss += critic_loss
-                total_episodic_reward += reward.sum().item()
+                total_normalized_reward += experiences.reward.sum()
 
-                # Update the learning rate scheduler
-                critic_scheduler.step()
-                actor_scheduler.step()
+                if t % 2000 == 0:
+                    print(f"iteration {t} sigma: {self.ou_noise.sigma}")
 
-            # After finishing the iterations for the episode, log the average losses
-            avg_episode_actor_loss = episode_actor_loss / (n_iterations_per_episode)
-            avg_episode_critic_loss = episode_critic_loss / (n_iterations_per_episode)
+            # Update the learning rate scheduler
+            critic_scheduler.step()
+            actor_scheduler.step()
+
+            # After training during the episode, log the average losses
+            avg_episode_actor_loss = episode_actor_loss / n_samples
+            avg_episode_critic_loss = episode_critic_loss / n_samples
             actor_losses.append(avg_episode_actor_loss)
             critic_losses.append(avg_episode_critic_loss)
-            rewards.append(total_episodic_reward / batch_size)
+            rewards.append(true_episodic_reward)
 
             print(
-                f"Episode {episode + 1} - Actor Loss: {avg_episode_actor_loss:.4f}, Critic Loss: {avg_episode_critic_loss:.4f}, Total Reward: {total_episodic_reward/batch_size:.4f}"
+                f"Episode {episode + 1} - Actor Loss: {avg_episode_actor_loss:.4f}, Critic Loss: {avg_episode_critic_loss:.4f}, Total Normalized Reward in Episode: {total_normalized_reward:.4f}, True Episodic Reward: {true_episodic_reward:.4f}"
             )
 
+<<<<<<< HEAD
             # Update target networks after each episode
             # self.update_target_networks()
 
+=======
+>>>>>>> ddpg_change
         print("Training complete!")
         # performance plots
         plot_performance(actor_losses, critic_losses, rewards)

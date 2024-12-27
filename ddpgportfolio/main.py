@@ -23,9 +23,13 @@ def main():
     WINDOW_SIZE = 50  # last n timesteps for the price tensor
     STEP_SIZE = 1  # for rolling window batch sampler
     start_date = "2024-01-01"  # start date of trading
+<<<<<<< HEAD
     end_date = "2024-09-30"
     N_EPISODES = 100  # number of episodes to train the agent
     N_ITERATIONS_PER_EPISODE = 20
+=======
+
+>>>>>>> ddpg_change
     # DEVICE = "mps"
 
     asset_names: List[str] = [
@@ -47,12 +51,10 @@ def main():
         asset_names=asset_names, start_date=start_date, end_date=end_date
     )
     # kraken_ds = KrakenDataSet(portfolio, WINDOW_SIZE)
-    agent = DDPGAgent(portfolio, BATCH_SIZE, WINDOW_SIZE, STEP_SIZE, 100)
+    agent = DDPGAgent(portfolio, BATCH_SIZE, WINDOW_SIZE, STEP_SIZE)
 
-    # need to pretrain the agent to populate the replay buffer with experiences
-    agent.pre_train()
     # train the agent
-    agent.train(N_EPISODES, N_ITERATIONS_PER_EPISODE)
+    agent.train(5)
 
 
 if __name__ == "__main__":
