@@ -54,10 +54,7 @@ class Actor(nn.Module):
         # Cash bias
         self.cash_bias = nn.Parameter(torch.full((1, 1, 1), 0.3))
 
-<<<<<<< HEAD
-=======
         # initialize weights
->>>>>>> ddpg_change
         self.apply(weights_init)
 
     def forward(self, state: Tuple[torch.tensor, torch.tensor]) -> torch.tensor:

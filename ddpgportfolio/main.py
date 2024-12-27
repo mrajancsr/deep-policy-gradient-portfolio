@@ -23,13 +23,9 @@ def main():
     WINDOW_SIZE = 50  # last n timesteps for the price tensor
     STEP_SIZE = 1  # for rolling window batch sampler
     start_date = "2024-01-01"  # start date of trading
-<<<<<<< HEAD
     end_date = "2024-09-30"
     N_EPISODES = 100  # number of episodes to train the agent
     N_ITERATIONS_PER_EPISODE = 20
-=======
-
->>>>>>> ddpg_change
     # DEVICE = "mps"
 
     asset_names: List[str] = [

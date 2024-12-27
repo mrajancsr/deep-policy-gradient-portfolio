@@ -134,41 +134,9 @@ class PrioritizedReplayMemory:
         scaled_priorities = self.priorities[: len(self.buffer)] ** self.alpha
         sampling_probabilities = scaled_priorities / scaled_priorities.sum()
 
-<<<<<<< HEAD
-        # Partition the buffer into recent and older sections
-        recent_cutoff = int(len(self.buffer) * 0.4)  # Top 20% of the buffer is recent
-        recent_indices = list(range(len(self.buffer) - recent_cutoff, len(self.buffer)))
-        older_indices = list(range(0, len(self.buffer) - recent_cutoff))
-
-        # Number of samples from each partition
-        n_recent = int(batch_size * p_recent)
-        n_older = batch_size - n_recent
-
-        # Normalize the priorities within each partition
-        recent_priorities = np.array(self.priorities)[recent_indices] ** self.alpha
-        older_priorities = np.array(self.priorities)[older_indices] ** self.alpha
-
-        # Calculate probabilities for sampling
-        prob_recent = recent_priorities / recent_priorities.sum()
-        prob_older = older_priorities / older_priorities.sum()
-
-        # Sample indices from each partition
-        sampled_recent = np.random.choice(recent_indices, size=n_recent, p=prob_recent)
-        sampled_older = np.random.choice(older_indices, size=n_older, p=prob_older)
-
-        # Combine sampled indices and shuffle
-        indices = np.concatenate([sampled_recent, sampled_older])
-        np.random.shuffle(indices)
-
-        # Compute importance-sampling weights for combined indices
-        combined_priorities = np.array(self.priorities)[indices]
-        prob_combined = (
-            combined_priorities**self.alpha / (combined_priorities**self.alpha).sum()
-=======
         # Sample indices based on probabilities
         indices = np.random.choice(
             len(self.buffer), size=batch_size, p=sampling_probabilities
->>>>>>> ddpg_change
         )
         experiences = [self.buffer[idx] for idx in indices]
 
