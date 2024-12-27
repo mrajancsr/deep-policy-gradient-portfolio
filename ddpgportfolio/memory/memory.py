@@ -176,12 +176,15 @@ class PrioritizedReplayMemory:
     def update_priorities(
         self,
         indices: np.ndarray,
-        td_errors: np.ndarray,
+        td_errors: torch.tensor,
         recency_weight: Optional[float] = None,
     ):
         """
         Updates the priorities of sampled experiences based on TD errors and optionally recency bias.
         """
+        assert not torch.any(torch.isnan(td_errors)), "NaN in TD errors!"
+        assert not np.any(indices >= len(self.buffer)), "Indices out of range!"
+
         # Calculate new priorities
         td_error_priorities = (abs(td_errors) + self.epsilon).flatten()
 

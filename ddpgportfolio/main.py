@@ -43,10 +43,10 @@ def main():
 
     portfolio = Portfolio(asset_names=asset_names, start_date=start_date)
     # kraken_ds = KrakenDataSet(portfolio, WINDOW_SIZE)
-    agent = DDPGAgent(portfolio, BATCH_SIZE, WINDOW_SIZE, STEP_SIZE, 100)
+    agent = DDPGAgent(portfolio, BATCH_SIZE, WINDOW_SIZE, STEP_SIZE)
 
     # train the agent
-    agent.train(10)
+    agent.train(5)
 
 
 if __name__ == "__main__":

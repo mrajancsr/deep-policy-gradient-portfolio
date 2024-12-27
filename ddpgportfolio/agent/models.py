@@ -42,13 +42,19 @@ class Actor(nn.Module):
             ),
             nn.LeakyReLU(0.01, inplace=True),
             nn.Conv2d(2, 20, kernel_size=(1, 48), stride=1, padding=(0, 0)),
+            nn.BatchNorm2d(20),
             nn.LeakyReLU(0.01, inplace=True),
         )
+
+        # Convolutional layer for combining price tensor and previous weights
         self.conv_layer_with_weights = nn.Sequential(
             nn.Conv2d(21, 1, kernel_size=(1, 1), stride=1)
         )
+
+        # Cash bias
         self.cash_bias = nn.Parameter(torch.full((1, 1, 1), 0.3))
-        self.softmax = nn.Softmax(dim=1)
+
+        # initialize weights
         self.apply(weights_init)
 
     def forward(self, state: Tuple[torch.tensor, torch.tensor]) -> torch.tensor:
@@ -71,18 +77,24 @@ class Actor(nn.Module):
             action or current weights at time t
         """
         price_tensor, prev_weights = state
+
+        # Ensure no NaNs in inputs
         assert not torch.any(torch.isnan(prev_weights)), "NaN in weights!"
         assert not torch.any(torch.isnan(price_tensor)), "NaN prices!"
-        x = self.conv_layer(price_tensor)
 
+        # check input dimension
+        is_single_example = price_tensor.dim() == 3  # single example vs batch
+
+        if is_single_example:
+            price_tensor = price_tensor.unsqueeze(0)
+            x = self.conv_layer(price_tensor).squeeze(0)
+        else:
+            x = self.conv_layer(price_tensor)
         assert not torch.any(torch.isnan(x)), "NaN convolution!"
 
-        # get the dimension
-        ndim = price_tensor.dim()
-
         # add previous weights to next conv layer
-        if ndim == 3:
-            # only one example
+        if is_single_example:
+
             dim = 0
             prev_weights = prev_weights.unsqueeze(0).unsqueeze(2)
             x = torch.cat([x, prev_weights], dim=dim)
@@ -103,7 +115,9 @@ class Actor(nn.Module):
         logits = torch.cat([cash_bias, x], dim=dim)
         # current_weights = self.softmax(x).view(-1)
 
-        return logits.squeeze(-1) if ndim == 3 else logits.squeeze(1).squeeze(-1)
+        return (
+            logits.squeeze(-1) if is_single_example else logits.squeeze(1).squeeze(-1)
+        )
 
 
 class Critic(nn.Module):

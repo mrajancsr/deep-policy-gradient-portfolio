@@ -114,8 +114,7 @@ class Portfolio:
             portfolio weight at the beginning of previous period
             shape=(batch_size, m_noncash_assets)
         """
-        cash_weight = 1 - wt_prev.sum()
-        wt_prime = (yt * wt_prev) / (yt.dot(wt_prev) + cash_weight)
+        wt_prime = (yt * wt_prev) / (yt.dot(wt_prev) + 1e-5)
         return wt_prime
 
     def get_transacton_remainder_factor(
@@ -151,16 +150,16 @@ class Portfolio:
         wt_prime = self.get_end_of_period_weights(yt, wt_prev)
 
         # get end of period cash position for each example in batch
-        wt_cash_prime = 1 - wt_prime.sum()
+        wt_cash_prime = wt_prime[0]
 
         # get cash position for portfolio weight at period t+1
-        wt_cash = 1 - wt.sum()
+        wt_cash = wt[0]
 
         # initial transaction remainder factor
-        ut_k = comission_rate * torch.abs(wt - wt_prime).sum()
+        ut_k = comission_rate * torch.abs(wt[1:] - wt_prime[1:]).sum()
         c = comission_rate
         for _ in range(n_iter):
-            update_term = torch.relu(wt_prime - ut_k * wt).sum()
+            update_term = torch.relu(wt_prime[1:] - ut_k * wt[1:]).sum()
             ut_k = (
                 1
                 / (1 - c * wt_cash)
@@ -174,6 +173,8 @@ class Portfolio:
         yt: torch.tensor,
         wt_prev: torch.tensor,
         risk_free_rate: float = 0.0425,
+        beta: float = 0.0018,
+        alpha: float = 0.2,
     ):
         """returns the immediate reward to the agent given by 11 and mentioned on pg 11
         given by rt = ln(ut*yt . w(t-1)) / batch_size
@@ -190,24 +191,45 @@ class Portfolio:
         rf_period = risk_free_rate / self.get_annualization_factor()
         # Risk penalty (volatility or large weight changes)
 
-        # ut = self.get_transacton_remainder_factor(wt, yt, wt_prev)
-        # portfolio return before transaction cost
-
         yt_with_cash = torch.concat(
             [torch.tensor(1 + rf_period).unsqueeze(0), yt], dim=-1
         )
+
+        weight_change_penalty = torch.sum(
+            torch.abs(wt - wt_prev), dim=-1
+        )  # penalize large changes in portfolio weights
+
+        # Compute transaction cost penalty: this is based on the change in portfolio weights
+        transaction_penalty = beta * weight_change_penalty
+        ut = self.get_transacton_remainder_factor(wt, yt_with_cash, wt_prev)
+        # portfolio return before transaction cost
 
         portfolio_return = yt_with_cash.dot(wt_prev)
 
         # Avoid log(0) or negative values by adding a small epsilon
         epsilon = 1e-6
-        reward = torch.log(portfolio_return + epsilon)
+        reward = torch.log(ut * portfolio_return + epsilon)
         relative_penalty = portfolio_return.abs().mean() + 1e-6
 
         # profitability incentive
         alignment_incentive = torch.sum(wt_prev * torch.relu(yt_with_cash - 1))
-        alpha = 0.3
-        return reward + alpha * alignment_incentive
+
+        return reward + alpha * alignment_incentive - transaction_penalty
 
     def update_portfolio_value(self, previous_portfolio_value, reward: torch.tensor):
         return previous_portfolio_value * torch.exp(reward)
+
+    def calculate_total_return(self, equity_curve: List[float]):
+        """
+        Calculate the total return from an equity curve.
+
+        Args:
+            equity_curve (list): List of portfolio values over time.
+
+        Returns:
+            float: Total return as a percentage.
+        """
+        V_start = equity_curve[0]
+        V_end = equity_curve[-1]
+        total_return = ((V_end - V_start) / V_start) * 100
+        return total_return

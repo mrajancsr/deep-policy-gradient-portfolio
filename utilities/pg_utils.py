@@ -13,6 +13,7 @@ class OrnsteinUhlenbeckNoise:
         self.sigma = sigma
         self.size = size
         self.device = device
+        self.initial_sigma = sigma
         self.reset()
 
     def reset(self):
@@ -24,8 +25,15 @@ class OrnsteinUhlenbeckNoise:
         self.state = x + dx
         return torch.tensor(self.state, dtype=torch.float32, device=self.device)
 
-    def decay_sigma(self, decay_rate=0.995, min_sigma=0.05):
-        self.sigma = max(self.sigma * decay_rate, min_sigma)
+    def reset_sigma(self, episode, episode_decay_rate=0.01, min_sigma=0.05):
+        self.sigma = max(
+            min_sigma, self.initial_sigma * (1 - episode_decay_rate * episode)
+        )
+
+    def decay_sigma(self, delta_t, decay_rate_within_episode=0.995, min_sigma=0.05):
+        self.sigma = max(
+            self.sigma * np.exp(-delta_t * decay_rate_within_episode), min_sigma
+        )
 
 
 class RewardNormalizer:
