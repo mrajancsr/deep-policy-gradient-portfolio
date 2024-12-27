@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import pickle
+import sys
 from dataclasses import dataclass, field
 from typing import Dict, Iterator, List
 
@@ -219,17 +220,30 @@ class Portfolio:
     def update_portfolio_value(self, previous_portfolio_value, reward: torch.tensor):
         return previous_portfolio_value * torch.exp(reward)
 
-    def calculate_total_return(self, equity_curve: List[float]):
-        """
-        Calculate the total return from an equity curve.
+    def calculate_final_equity_return(self, equity_curve: List[float]):
+        """calculates total return from equity curve
 
-        Args:
-            equity_curve (list): List of portfolio values over time.
+        Parameters
+        ----------
+        equity_curve : List[float]
+            _description_
 
-        Returns:
-            float: Total return as a percentage.
+        Returns
+        -------
+        _type_
+            _description_
         """
         V_start = equity_curve[0]
         V_end = equity_curve[-1]
         total_return = ((V_end - V_start) / V_start) * 100
         return total_return
+
+    def calculate_max_drawdown(self, equity_curve: List[float]) -> float:
+        peak = equity_curve[0]
+        max_drawdown = -sys.maxsize
+        for value in equity_curve:
+            if value > peak:
+                peak = value
+            drawdown = (peak - value) / peak
+            max_drawdown = max(max_drawdown, drawdown)
+        return max_drawdown * 100
