@@ -24,8 +24,7 @@ def main():
     STEP_SIZE = 1  # for rolling window batch sampler
     start_date = "2024-01-01"  # start date of trading
     end_date = "2024-09-30"
-    N_EPISODES = 100  # number of episodes to train the agent
-    N_ITERATIONS_PER_EPISODE = 20
+    N_EPISODES = 5  # number of episodes to train the agent
     # DEVICE = "mps"
 
     asset_names: List[str] = [
@@ -50,7 +49,7 @@ def main():
     agent = DDPGAgent(portfolio, BATCH_SIZE, WINDOW_SIZE, STEP_SIZE)
 
     # train the agent
-    agent.train(5)
+    agent.train(N_EPISODES)
 
 
 if __name__ == "__main__":
