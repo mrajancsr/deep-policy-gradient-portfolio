@@ -19,7 +19,6 @@ from ddpgportfolio.portfolio.portfolio import Portfolio
 from utilities.pg_utils import (
     OrnsteinUhlenbeckNoise,
     RewardNormalizer,
-    normalize_batch_rewards,
     plot_performance,
 )
 

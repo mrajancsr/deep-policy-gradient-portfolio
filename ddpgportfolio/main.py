@@ -4,10 +4,8 @@
 # For more details, see: c.f https://arxiv.org/abs/1706.10059
 
 
-import random
 from typing import List
 
-import numpy as np
 import torch
 
 from ddpgportfolio.agent.ddpg_agent import DDPGAgent
