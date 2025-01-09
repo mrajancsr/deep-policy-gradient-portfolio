@@ -96,8 +96,7 @@ def plot_performance(
 
     # Plot actor and critic losses
     plt.plot(episodes, actor_losses, label="Actor Loss", color="blue")
-    plt.plot(episodes, critic_losses, label="Critic Loss", color="orange")
-    plt.title("Actor and Critic Losses Over Episodes")
+    plt.title("Actor losses Over Episodes")
     plt.xlabel("Episode")
     plt.ylabel("Loss")
     plt.legend()
@@ -105,19 +104,10 @@ def plot_performance(
     plt.show()
 
     plt.figure(figsize=(12, 6))
-
-    plt.plot(episodes, total_rewards, label="Total Reward", color="green")
-    plt.plot(
-        episodes, np.cumsum(total_rewards), label="Cumulative Reward", color="blue"
-    )
-
-    plt.title("Cumulative Reward (Log Scale)")
+    plt.plot(episodes, critic_losses, label="Critic Loss", color="orange")
+    plt.title("Critic Losses Over Episodes")
     plt.xlabel("Episode")
-    plt.ylabel("Reward")
-    plt.legend()
-    plt.grid(True)
-    plt.yscale("log")
-    plt.show()
+    plt.ylabel("Loss")
 
 
 def set_seed(seed: int):

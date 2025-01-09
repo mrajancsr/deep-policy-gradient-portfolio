@@ -32,9 +32,9 @@ class Portfolio:
     asset_names: List[str]
     start_date: str
     end_date: str
+    initial_cash: float
     __prices: Dict[str, pd.DataFrame] = field(init=False, default_factory=lambda: {})
     __assets: Dict[str, Asset] = field(init=False)
-    __initial_port: float = 10000
     m_assets: int = field(init=False, default=0)
     m_noncash_assets: int = field(init=False, default=0)
     __annualization_factor: int = field(init=False, default=365 * 48)
@@ -80,7 +80,7 @@ class Portfolio:
             \nm_assets: {[asset.name for asset in self.assets()]}"
 
     def get_initial_portfolio_value(self):
-        return self.__initial_port
+        return self.initial_cash
 
     def get_asset(self, name: str) -> Asset:
         """Returns the asset in the portfolio given the name of the asset
@@ -187,6 +187,7 @@ class Portfolio:
         risk_free_rate: float = 0.0425,
         beta: float = 0.0018,
         alpha: float = 0.2,
+        commission_rate: float = 0.0018,
     ):
         """returns the immediate reward to the agent given by 11 and mentioned on pg 11
         given by rt = ln(ut*yt . w(t-1)) / batch_size
@@ -213,7 +214,9 @@ class Portfolio:
 
         # Compute transaction cost penalty: this is based on the change in portfolio weights
         transaction_penalty = beta * weight_change_penalty
-        ut = self.get_transacton_remainder_factor(wt, yt_with_cash, wt_prev)
+        ut = self.get_transacton_remainder_factor(
+            wt, yt_with_cash, wt_prev, commission_rate
+        )
         # portfolio return before transaction cost
 
         portfolio_return = yt_with_cash.dot(wt_prev)
@@ -221,12 +224,11 @@ class Portfolio:
         # Avoid log(0) or negative values by adding a small epsilon
         epsilon = 1e-6
         reward = torch.log(ut * portfolio_return + epsilon)
-        relative_penalty = portfolio_return.abs().mean() + 1e-6
 
         # profitability incentive
         alignment_incentive = torch.sum(wt_prev * torch.relu(yt_with_cash - 1))
 
-        return reward + alpha * alignment_incentive - transaction_penalty
+        return reward + alpha * alignment_incentive
 
     def update_portfolio_value(self, previous_portfolio_value, reward: torch.tensor):
         return previous_portfolio_value * torch.exp(reward)

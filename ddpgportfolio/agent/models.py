@@ -24,7 +24,7 @@ def weights_init(m):
 
 
 class Actor(nn.Module):
-    def __init__(self, input_channels=3, output_dim=11):
+    def __init__(self, input_channels: int, look_back: int, output_dim: int):
         """_summary_
 
         Parameters
@@ -35,13 +35,15 @@ class Actor(nn.Module):
             number of asset weights, default=11
         """
         super(Actor, self).__init__()
+        self.input_channels = input_channels
         self.output_dim = output_dim
+        self.look_back = look_back
         self.conv_layer = nn.Sequential(
             nn.Conv2d(
                 input_channels, 2, kernel_size=(1, 3), stride=(1, 1), padding=(0, 0)
             ),
             nn.LeakyReLU(0.01, inplace=True),
-            nn.Conv2d(2, 20, kernel_size=(1, 48), stride=1, padding=(0, 0)),
+            nn.Conv2d(2, 20, kernel_size=(1, look_back - 2), stride=1, padding=(0, 0)),
             nn.BatchNorm2d(20),
             nn.LeakyReLU(0.01, inplace=True),
         )
@@ -121,7 +123,7 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, input_channels: int = 3, m_assets: int = 12):
+    def __init__(self, input_channels, look_back, m_assets):
         """Critic network for DDPG.  Given a state (Xt, w(t-1)), this network outputs the Q-Value
 
         Parameters
@@ -132,6 +134,9 @@ class Critic(nn.Module):
             _description_
         """
         super(Critic, self).__init__()
+        self.input_channels = input_channels
+        self.output_dim = m_assets
+        self.look_back = look_back
         self.m_assets = m_assets
         self.conv_layer = nn.Sequential(
             nn.Conv2d(input_channels, 16, kernel_size=(1, 3), stride=(1, 1)),

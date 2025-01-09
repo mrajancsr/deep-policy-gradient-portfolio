@@ -25,6 +25,8 @@ class PortfolioVectorMemory:
         self.memory = torch.ones(self.n_samples, self.m_noncash_assets) / (
             self.m_noncash_assets + 1
         )
+        if self.initial_weight is not None:
+            self.update_memory_stack(self.initial_weight, 0)
         self.memory = self.memory.to(self.device)
 
     def update_memory_stack(self, new_weights: torch.tensor, indices: torch.tensor):
@@ -69,7 +71,6 @@ class Experience:
     action: torch.tensor
     reward: torch.tensor
     next_state: Tuple[torch.tensor, torch.tensor]
-    previous_index: torch.tensor
 
     def __repr__(self):
         return "Experience"
@@ -140,14 +141,13 @@ class PrioritizedReplayMemory:
         )
         experiences = [self.buffer[idx] for idx in indices]
 
-        xt, prev_action, action, reward, xt_next, prev_index = zip(
+        xt, prev_action, action, reward, xt_next = zip(
             *[
                 (
                     *(exp.state[0], exp.state[1]),
                     exp.action,
                     exp.reward,
                     exp.next_state[0],
-                    exp.previous_index,
                 )
                 for exp in experiences
             ]
@@ -158,11 +158,8 @@ class PrioritizedReplayMemory:
         action = torch.stack(action)
         reward = torch.tensor(reward, dtype=torch.float32)
         xt_next = torch.stack(xt_next)
-        prev_index = torch.tensor(prev_index)
 
-        experience = Experience(
-            (xt, prev_action), action, reward, (xt_next, action), prev_index
-        )
+        experience = Experience((xt, prev_action), action, reward, (xt_next, action))
 
         # Compute importance-sampling weights
         weights = (len(self.buffer) * sampling_probabilities[indices]) ** -beta
